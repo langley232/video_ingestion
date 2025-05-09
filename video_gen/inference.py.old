@@ -1,0 +1,80 @@
+import torch
+from diffusers import CogVideoXImageToVideoPipeline
+from diffusers.utils import export_to_video, load_image
+from fastapi import FastAPI, HTTPException, Form
+from fastapi.responses import StreamingResponse
+import io
+import logging
+import os
+import tempfile
+from torchao.quantization import quantize_, int8_weight_only
+from transformers import T5EncoderModel, AutoencoderKL, CogVideoXTransformer3DModel
+
+app = FastAPI()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Load quantized pipeline
+def load_quantized_pipeline():
+    quantization = int8_weight_only
+    text_encoder = T5EncoderModel.from_pretrained("THUDM/CogVideoX-5B-I2V", subfolder="text_encoder", torch_dtype=torch.bfloat16)
+    quantize_(text_encoder, quantization())
+    transformer = CogVideoXTransformer3DModel.from_pretrained("THUDM/CogVideoX-5B-I2V", subfolder="transformer", torch_dtype=torch.bfloat16)
+    quantize_(transformer, quantization())
+    vae = AutoencoderKL.from_pretrained("THUDM/CogVideoX-5B-I2V", subfolder="vae", torch_dtype=torch.bfloat16)
+    quantize_(vae, quantization())
+    pipe = CogVideoXImageToVideoPipeline.from_pretrained(
+        "THUDM/CogVideoX-5B-I2V",
+        text_encoder=text_encoder,
+        transformer=transformer,
+        vae=vae,
+        torch_dtype=torch.bfloat16
+    )
+    pipe.enable_model_cpu_offload()
+    pipe.vae.enable_tiling()
+    pipe.vae.enable_slicing()
+    return pipe
+
+pipe = load_quantized_pipeline()
+
+@app.post("/generate")
+async def generate_video(prompt: str = Form(...), image_path: str = Form(None)):
+    try:
+        logger.info(f"Generating video for prompt: {prompt}")
+        if not image_path:
+            image_path = "input/default.jpg"
+        if not os.path.exists(image_path):
+            raise HTTPException(status_code=400, detail="Input image not found")
+
+        image = load_image(image_path)
+        device = "cuda"
+
+        video_frames = pipe(
+            prompt=prompt,
+            image=image,
+            num_videos_per_prompt=1,
+            num_inference_steps=50,
+            num_frames=49,
+            guidance_scale=6,
+            generator=torch.Generator(device=device).manual_seed(42)
+        ).frames[0]
+
+        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
+            export_to_video(video_frames, temp_file.name, fps=8)
+            with open(temp_file.name, 'rb') as f:
+                video_content = f.read()
+            os.unlink(temp_file.name)
+
+        return StreamingResponse(
+            io.BytesIO(video_content),
+            media_type="video/mp4",
+            headers={"Content-Disposition": "attachment; filename=generated_video.mp4"}
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating video: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8002)

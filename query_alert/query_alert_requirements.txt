@@ -1,0 +1,8 @@
+confluent-kafka
+fastapi
+pydantic
+numpy
+opencv-python
+requests
+faiss-cpu
+uvicorn

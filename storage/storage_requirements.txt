@@ -1,0 +1,5 @@
+confluent-kafka
+numpy
+opencv-python
+requests
+faiss-cpu

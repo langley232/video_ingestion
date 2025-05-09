@@ -1,0 +1,16 @@
+[DEFAULT]
+user = ocid1.user.oc1..aaaaaaaaigngxrbcr3vmymt3elqhcqaxnplfw35cksp6pscrjvt5nyyuiaka
+fingerprint = 36:a5:5b:af:6e:35:37:b8:2b:46:b4:76:80:40:ac:36
+tenancy = ocid1.tenancy.oc1..aaaaaaaai25gar5rnnnzlaho2yjotlzjyxhpnxq6nojqyxel6c4n737uegdq
+region = us-phoenix-1
+key_file = /home/ubuntu/.oci/oracle_api_key.pem
+
+
+
+[PHOENIX]
+fingerprint=36:7b:3f:1c:8a:8b:bf:e6:5d:04:d1:b8:48:66:d0:c3
+key_file=/home/ubuntu/.oci/sessions/PHOENIX/oci_api_key.pem
+tenancy=ocid1.tenancy.oc1..aaaaaaaai25gar5rnnnzlaho2yjotlzjyxhpnxq6nojqyxel6c4n737uegdq
+region=us-phoenix-1
+user = ocid1.user.oc1..aaaaaaaaigngxrbcr3vmymt3elqhcqaxnplfw35cksp6pscrjvt5nyyuiaka
+security_token_file=/home/ubuntu/.oci/sessions/PHOENIX/token

@@ -1,0 +1,190 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - video_processing_net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true  # Kept for fallback
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - video_processing_net
+  kafka-init:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      echo "Waiting for Kafka to be ready..."
+      until kafka-topics --list --bootstrap-server kafka:9092 > /dev/null 2>&1; do
+        echo "Kafka not ready yet, sleeping..."
+        sleep 1
+      done
+      echo "Kafka is ready, creating video-ingestion topic..."
+      kafka-topics --create --topic video-ingestion --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 || {
+        echo "Failed to create topic, checking if it exists..."
+        if ! kafka-topics --list --bootstrap-server kafka:9092 | grep -q video-ingestion; then
+          echo "Topic creation failed and topic does not exist, exiting with error..."
+          exit 1
+        else
+          echo "Topic already exists, proceeding..."
+        fi
+      }
+      echo "Topic creation completed successfully, exiting..."
+    networks:
+      - video_processing_net
+
+  ollama:
+    image: ollama/ollama
+    container_name: ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_MODELS=gemma:2b
+    command: ["serve"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 2
+              capabilities: [gpu]
+    networks:
+      - video_processing_net
+
+  ingestion:
+    build:
+      context: /home/ubuntu/git/video_ingestion/ingestion
+      dockerfile: Dockerfile
+    container_name: ingestion
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_started
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    volumes:
+      - video_storage:/app/videos
+    ports:
+      - "8000:8000"
+    networks:
+      - video_processing_net
+
+  storage:
+    build:
+      context: ./storage
+      dockerfile: Dockerfile
+    container_name: storage
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - LOCAL_STORAGE_PATH=/app/videos
+      - FAISS_INDEX_PATH=/app/faiss/video_index.faiss
+    volumes:
+      - video_storage:/app/videos
+      - faiss_data:/app/faiss
+    networks:
+      - video_processing_net
+
+  query_alert:
+    build:
+      context: ./query_alert
+      dockerfile: Dockerfile
+    container_name: query_alert
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_started
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - FAISS_INDEX_PATH=/app/faiss/video_index.faiss
+      - LOCAL_STORAGE_PATH=/app/videos
+    ports:
+      - "8001:8001"
+    volumes:
+      - video_storage:/app/videos
+      - faiss_data:/app/faiss
+    networks:
+      - video_processing_net
+
+  streamlit:
+    build:
+      context: ./streamlit
+      dockerfile: Dockerfile
+    container_name: streamlit
+    depends_on:
+      - ingestion
+      - query_alert
+      - video_gen
+    ports:
+      - "8501:8501"
+    networks:
+      - video_processing_net
+
+  video_gen:
+    build:
+      context: ./video_gen
+      dockerfile: Dockerfile
+    container_name: video_gen
+    depends_on:
+      - ollama
+    ports:
+      - "8002:8002"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ./samples:/app/samples
+      - ./input:/app/input
+    networks:
+      - video_processing_net
+
+volumes:
+  video_storage:
+    name: video_storage
+  faiss_data:
+    name: faiss_data
+  ollama_data:
+    name: ollama_data
+
+networks:
+  video_processing_net:
+    name: video_processing_net
+    driver: bridge

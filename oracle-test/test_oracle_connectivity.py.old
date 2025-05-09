@@ -1,0 +1,65 @@
+import os
+import logging
+import oracledb
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Oracle configuration from your .env
+ORACLE_DSN = "(DESCRIPTION=(RETRY_COUNT=20)(RETRY_DELAY=3)(ADDRESS=(PROTOCOL=tcps)(PORT=1521)(HOST=adb.us-phoenix-1.oraclecloud.com))(CONNECT_DATA=(SERVICE_NAME=mpc9izwk0tyndo2r_low.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))"
+ORACLE_USER = "ADMIN"
+ORACLE_PASSWORD = "Mabus2322467@"
+WALLET_LOCATION = "/app/wallet"  # Mounted wallet directory
+
+def test_oracle_connection():
+    """Test connection to Oracle Autonomous Database."""
+    try:
+        logger.info("Attempting to connect to Oracle database...")
+        connection = oracledb.connect(
+            user=ORACLE_USER,
+            password=ORACLE_PASSWORD,
+            dsn=ORACLE_DSN,
+            wallet_location=WALLET_LOCATION
+        )
+        logger.info("Successfully connected to Oracle database")
+
+        # Create a test table
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE test_connectivity (
+                    id NUMBER PRIMARY KEY,
+                    message VARCHAR2(100)
+                )
+            """)
+            connection.commit()
+            logger.info("Created test table 'test_connectivity'")
+
+        # Insert a test row
+        with connection.cursor() as cursor:
+            cursor.execute("INSERT INTO test_connectivity (id, message) VALUES (1, 'Connection Test Successful')")
+            connection.commit()
+            logger.info("Inserted test row into 'test_connectivity'")
+
+        # Query the table to verify
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT * FROM test_connectivity")
+            row = cursor.fetchone()
+            logger.info("Query result: %s", row)
+
+        # Clean up (drop the table)
+        with connection.cursor() as cursor:
+            cursor.execute("DROP TABLE test_connectivity")
+            connection.commit()
+            logger.info("Dropped test table 'test_connectivity'")
+
+        connection.close()
+        logger.info("Connection closed successfully")
+
+    except oracledb.Error as e:
+        logger.error("Oracle connection failed: %s", str(e))
+    except Exception as e:
+        logger.error("Unexpected error: %s", str(e))
+
+if __name__ == "__main__":
+    test_oracle_connection()
