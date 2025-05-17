@@ -1,0 +1,42 @@
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04 AS base
+
+# Install system dependencies including python3.10-venv
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    libgl1-mesa-dev \
+    libglib2.0-0 \
+    ffmpeg \
+    python3.10-dev \
+    python3.10-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up Python virtual environment
+RUN python3.10 -m venv /venv
+ENV PATH="/venv/bin:$PATH"
+RUN pip install --upgrade pip
+
+# Copy and install Python dependencies
+COPY requirements.txt /app/requirements.txt
+RUN pip install -r /app/requirements.txt
+
+# Upgrade diffusers to ensure DPMScheduler is available
+RUN pip install --upgrade diffusers
+
+# Set work directory
+WORKDIR /app
+
+# Copy the application code
+COPY . /app
+
+# Download the model
+COPY download_model.py /app/download_model.py
+RUN chmod +x /app/download_model.py && python3 /app/download_model.py
+
+# Expose the API port
+EXPOSE 8002
+
+# Command to run the API
+CMD ["uvicorn", "inference:app", "--host", "0.0.0.0", "--port", "8002"]

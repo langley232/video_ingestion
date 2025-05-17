@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Start Kafka server using the image's entrypoint
+echo "Starting Kafka broker..."
+/usr/bin/kafka-server-start /etc/kafka/server.properties &
+
+# Wait for Kafka broker to be ready
+echo "Waiting for Kafka broker to be ready..."
+until nc -z localhost 9092; do
+    echo "Kafka broker not ready, retrying in 5 seconds..."
+    sleep 5
+done
+echo "Kafka broker is ready."
+
+# Create the topic
+echo "Creating topic 'video-ingestion'..."
+until /usr/bin/kafka-topics --create --topic video-ingestion --bootstrap-server kafka:9092 --replication-factor 1 --partitions 1 --config retention.ms=-1; do
+    echo "Failed to create topic, retrying in 5 seconds..."
+    sleep 5
+done
+echo "Topic 'video-ingestion' created successfully."
+
+# Verify topic creation
+echo "Verifying topic creation..."
+/usr/bin/kafka-topics --list --bootstrap-server kafka:9092 | grep video-ingestion
+
+# Keep the container running
+wait

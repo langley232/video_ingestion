@@ -1,16 +1,26 @@
-FROM python:3.9-slim
+FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
 
-WORKDIR /app
-
+# Install Python and dependencies
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
+    python3.10 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --upgrade pip
-COPY ingestion_requirements.txt requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Upgrade pip
+RUN pip3 install --no-cache-dir --upgrade pip
 
-COPY . .
+# Set working directory
+WORKDIR /app
 
-CMD ["python", "ingestion.py"]
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY ingestion.py .
+
+# Expose FastAPI port
+EXPOSE 8000
+
+# Run FastAPI server
+CMD ["uvicorn", "ingestion:app", "--host", "0.0.0.0", "--port", "8000"]

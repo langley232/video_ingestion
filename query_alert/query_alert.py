@@ -1,174 +1,140 @@
-from confluent_kafka import Consumer, KafkaError
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import json
-import numpy as np
-import cv2
-import requests
 import os
+import time
+from minio import Minio
+from minio.error import S3Error
+import requests
+import json
+import base64
+from PIL import Image
+import io
 import logging
-import threading
-import faiss
-import glob
-from datetime import datetime
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+# MinIO configuration
+minio_client = Minio(
+    endpoint=os.getenv("MINIO_ENDPOINT", "minio:9000").replace("http://", ""),
+    access_key=os.getenv("MINIO_ACCESS_KEY", "admin"),
+    secret_key=os.getenv("MINIO_SECRET_KEY", "admin1234"),
+    secure=False
+)
+bucket_name = os.getenv("MINIO_BUCKET", "videos")
 
-# Validate environment variables
-KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka:9092')
-FAISS_INDEX_PATH = os.getenv('FAISS_INDEX_PATH', '/app/faiss/video_index.faiss')
-LOCAL_STORAGE_PATH = os.getenv('LOCAL_STORAGE_PATH', '/app/videos')
+# Create bucket if it doesn't exist
+try:
+    if not minio_client.bucket_exists(bucket_name):
+        minio_client.make_bucket(bucket_name)
+        logger.info(f"Created MinIO bucket: {bucket_name}")
+except S3Error as e:
+    logger.error(f"Error creating MinIO bucket: {str(e)}")
+    raise
 
-# Kafka configuration
-kafka_config = {
-    'bootstrap.servers': KAFKA_BOOTSTRAP_SERVERS,
-    'group.id': 'alert-consumer-group',
-    'auto.offset.reset': 'earliest'
-}
-consumer = Consumer(kafka_config)
-consumer.subscribe(['video-ingestion'])
+# Ollama configuration
+ollama_endpoint = os.getenv("OLLAMA_ENDPOINT", "http://ollama:11434")
+model_name = "llava:13b"
 
-# FAISS configuration
-dimension = 512  # Adjust based on MiniCPM-V 2.6 embedding size
+# Storage service configuration
+storage_endpoint = os.getenv("STORAGE_ENDPOINT", "http://storage:8001")
 
-def detect_objects(frame):
-    """Detect objects in a frame using MiniCPM-V 2.6 via Ollama."""
+def analyze_frame(frame_data: bytes) -> dict:
+    """Analyze a frame using ollama's llava:13b model."""
     try:
-        _, buffer = cv2.imencode('.jpg', frame)
-        response = requests.post(
-            'http://ollama:11434/api/generate',
-            json={
-                'model': 'minicpm-v:2.6',
-                'prompt': 'Detect objects in this image (e.g., tank, military vehicle, missile, drone, person).',
-                'image': buffer.tobytes().hex()
-            }
-        )
+        # Convert frame to base64
+        img = Image.open(io.BytesIO(frame_data))
+        buffered = io.BytesIO()
+        img.save(buffered, format="JPEG")
+        img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+        # Query ollama
+        payload = {
+            "model": model_name,
+            "prompt": "Detect objects in the image. Look for drones, missiles, or other suspicious objects. Return a JSON with detected objects and confidence scores.",
+            "images": [img_base64],
+            "format": "json"
+        }
+        response = requests.post(f"{ollama_endpoint}/api/generate", json=payload, timeout=30)
         response.raise_for_status()
-        objects = response.json().get('objects', [])
-        return objects if objects else []
+        result = json.loads(response.text.split('\n')[-2])['response']
+        return json.loads(result)
     except Exception as e:
-        logger.error(f"Error detecting objects: {str(e)}")
+        logger.error(f"Error analyzing frame: {str(e)}")
+        return {"objects": [], "error": str(e)}
+
+def query_similar_videos(embedding: list) -> list:
+    """Query storage service for similar videos."""
+    try:
+        payload = {"embedding": embedding}
+        response = requests.post(f"{storage_endpoint}/search", json=payload, timeout=10)
+        response.raise_for_status()
+        return response.json().get("similar_videos", [])
+    except Exception as e:
+        logger.error(f"Error querying similar videos: {str(e)}")
         return []
 
-def generate_response(prompt, objects=None):
-    """Generate a response using MiniCPM-V 2.6 via Ollama."""
+def store_alert(video_path: str, objects: list, similar_videos: list):
+    """Store alert in MinIO."""
     try:
-        response = requests.post(
-            'http://ollama:11434/api/generate',
-            json={
-                'model': 'minicpm-v:2.6',
-                'prompt': prompt or f"Generate alert for detected objects: {objects}"
-            }
-        )
-        response.raise_for_status()
-        return response.json().get('text', 'No response generated')
-    except Exception as e:
-        logger.error(f"Error generating response: {str(e)}")
-        return "Error generating response"
+        alert_data = {
+            "video_path": video_path,
+            "objects": objects,
+            "similar_videos": similar_videos,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        alert_path = f"alerts/alert_{int(time.time())}.json"
+        with open("/tmp/alert.json", "w") as f:
+            json.dump(alert_data, f)
+        minio_client.fput_object(bucket_name, alert_path, "/tmp/alert.json")
+        logger.info(f"Stored alert: {alert_path}")
+    except S3Error as e:
+        logger.error(f"Error storing alert: {str(e)}")
 
-def get_query_embedding(object_type):
-    """Generate an embedding for the query object type (placeholder)."""
-    try:
-        response = requests.post(
-            'http://ollama:11434/api/generate',
-            json={
-                'model': 'minicpm-v:2.6',
-                'prompt': f"Generate embedding for object type: {object_type}"
-            }
-        )
-        response.raise_for_status()
-        embedding = response.json().get('embedding', [])
-        return np.array(embedding, dtype=np.float32) if embedding else np.random.randn(dimension).astype(np.float32)
-    except Exception as e:
-        logger.error(f"Error generating query embedding: {str(e)}")
-        return np.random.randn(dimension).astype(np.float32)
-
-def query_vector_store(start_time, end_time, object_type):
-    """Query FAISS and local metadata for videos matching date/time range and object type."""
-    try:
-        # Parse timestamps
-        start_dt = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-        end_dt = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
-
-        # Query FAISS vector store
-        if not os.path.exists(FAISS_INDEX_PATH):
-            return generate_response(f"No FAISS index found at {FAISS_INDEX_PATH}")
-        faiss_index = faiss.read_index(FAISS_INDEX_PATH)
-        query_embedding = get_query_embedding(object_type).reshape(1, -1)
-        _, indices = faiss_index.search(query_embedding, k=10)
-        if not indices[0].size:
-            return generate_response("No matching vectors found in FAISS")
-
-        # Load metadata from JSON files within the date/time range
-        results = []
-        metadata_files = glob.glob(os.path.join(LOCAL_STORAGE_PATH, "metadata_*.json"))
-        for metadata_file in metadata_files:
-            with open(metadata_file, 'r') as f:
-                metadata = json.load(f)
-                file_timestamp = datetime.strptime(metadata['timestamp'], "%Y-%m-%d %H:%M:%S")
-                if start_dt <= file_timestamp <= end_dt and object_type.lower() in [obj.lower() for obj in metadata['objects']]:
-                    results.append(metadata)
-
-        prompt = f"Found {len(results)} video frames matching {object_type} from {start_time} to {end_time}"
-        return generate_response(prompt)
-    except Exception as e:
-        logger.error(f"Error querying vector store: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-def process_alerts():
-    """Process Kafka messages for real-time alerts."""
-    try:
-        while True:
-            msg = consumer.poll(1.0)
-            if msg is None:
-                continue
-            if msg.error():
-                if msg.error().code() == KafkaError._PARTITION_EOF:
+def main():
+    """Poll MinIO for new videos and process them."""
+    last_processed = None
+    while True:
+        try:
+            objects = minio_client.list_objects(bucket_name, prefix="generated/", recursive=True)
+            for obj in objects:
+                if last_processed and obj.last_modified <= last_processed:
                     continue
-                else:
-                    logger.error(f"Kafka error: {msg.error()}")
-                    break
-            data = json.loads(msg.value().decode('utf-8'))
-            frame_hex = data['video_content']
-            frame_data = bytes.fromhex(frame_hex)
-            frame_array = np.frombuffer(frame_data, dtype=np.uint8)
-            frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
-            if frame is None:
-                logger.warning("Failed to decode frame")
-                continue
-            objects = detect_objects(frame)
-            if objects:
-                response = generate_response(None, objects)
-                logger.info(f"Alert: {response}")
-    except Exception as e:
-        logger.error(f"Error in alert processing: {str(e)}")
-    finally:
-        consumer.close()
+                logger.info(f"Processing video: {obj.object_name}")
+                # Download video
+                response = minio_client.get_object(bucket_name, obj.object_name)
+                video_data = response.read()
+                response.close()
+                response.release_conn()
 
-class Query(BaseModel):
-    start_time: str
-    end_time: str
-    object_type: str
+                # Extract a frame (simplified: assume first frame)
+                frame_data = video_data[:1000000]  # Dummy extraction; use opencv in production
+                analysis = analyze_frame(frame_data)
+                objects_detected = analysis.get("objects", [])
 
-@app.post("/query/")
-async def query_endpoint(query: Query):
-    result = query_vector_store(
-        query.start_time,
-        query.end_time,
-        query.object_type
-    )
-    return {"result": result}
+                # Check for suspicious objects
+                suspicious = [obj for obj in objects_detected if obj["name"] in ["drone", "missile"] and obj["confidence"] > 0.7]
+                if suspicious:
+                    # Get embedding from ollama (nomic-embed-text for text description)
+                    embedding_payload = {
+                        "model": "nomic-embed-text:latest",
+                        "prompt": f"Video with objects: {', '.join([o['name'] for o in suspicious])}"
+                    }
+                    embedding_response = requests.post(f"{ollama_endpoint}/api/embeddings", json=embedding_payload, timeout=10)
+                    embedding_response.raise_for_status()
+                    embedding = embedding_response.json().get("embedding", [])
 
-@app.on_event("startup")
-async def startup_event():
-    alert_thread = threading.Thread(target=process_alerts, daemon=True)
-    alert_thread.start()
-    logger.info("Started alert processing thread")
+                    # Query similar videos
+                    similar_videos = query_similar_videos(embedding)
+
+                    # Store alert
+                    store_alert(obj.object_name, suspicious, similar_videos)
+
+                last_processed = obj.last_modified
+        except S3Error as e:
+            logger.error(f"MinIO error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error in main loop: {str(e)}")
+        time.sleep(10)  # Poll every 10 seconds
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    main()

@@ -1,80 +1,136 @@
-import torch
-from diffusers import CogVideoXImageToVideoPipeline
-from diffusers.utils import export_to_video, load_image
-from fastapi import FastAPI, HTTPException, Form
-from fastapi.responses import StreamingResponse
-import io
 import logging
 import os
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from diffusers import DiffusionPipeline
+import torch
+import cv2
+import numpy as np
+from minio import Minio
+from minio.error import S3Error
+import io
 import tempfile
-from torchao.quantization import quantize_, int8_weight_only
-from transformers import T5EncoderModel, AutoencoderKL, CogVideoXTransformer3DModel
+import ffmpeg
 
-app = FastAPI()
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load quantized pipeline
-def load_quantized_pipeline():
-    quantization = int8_weight_only
-    text_encoder = T5EncoderModel.from_pretrained("THUDM/CogVideoX-5B-I2V", subfolder="text_encoder", torch_dtype=torch.bfloat16)
-    quantize_(text_encoder, quantization())
-    transformer = CogVideoXTransformer3DModel.from_pretrained("THUDM/CogVideoX-5B-I2V", subfolder="transformer", torch_dtype=torch.bfloat16)
-    quantize_(transformer, quantization())
-    vae = AutoencoderKL.from_pretrained("THUDM/CogVideoX-5B-I2V", subfolder="vae", torch_dtype=torch.bfloat16)
-    quantize_(vae, quantization())
-    pipe = CogVideoXImageToVideoPipeline.from_pretrained(
-        "THUDM/CogVideoX-5B-I2V",
-        text_encoder=text_encoder,
-        transformer=transformer,
-        vae=vae,
-        torch_dtype=torch.bfloat16
+# Initialize FastAPI app
+app = FastAPI()
+
+# MinIO configuration
+minio_client = Minio(
+    endpoint=os.getenv("MINIO_ENDPOINT", "minio:9000").replace("http://", ""),
+    access_key=os.getenv("MINIO_ACCESS_KEY", "admin"),
+    secret_key=os.getenv("MINIO_SECRET_KEY", "admin1234"),
+    secure=False
+)
+bucket_name = os.getenv("MINIO_BUCKET", "videos")
+try:
+    if not minio_client.bucket_exists(bucket_name):
+        minio_client.make_bucket(bucket_name)
+except S3Error as e:
+    logger.error(f"Error creating bucket: {e}")
+
+# Load the model from pre-downloaded path
+try:
+    pipe = DiffusionPipeline.from_pretrained(
+        "/app/cache/models/wan2.1-t2v-1.3b",
+        torch_dtype=torch.float16,
+        use_safetensors=True,
+        low_cpu_mem_usage=True
     )
-    pipe.enable_model_cpu_offload()
-    pipe.vae.enable_tiling()
-    pipe.vae.enable_slicing()
-    return pipe
+    if torch.cuda.is_available():
+        pipe = pipe.to("cuda")
+        pipe.enable_model_cpu_offload()  # Optimize memory usage
+    logger.info("Wan 2.1 T2V-1.3B model loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load Wan 2.1 T2V-1.3B model: {str(e)}")
+    raise
 
-pipe = load_quantized_pipeline()
+class VideoRequest(BaseModel):
+    prompt: str
+    num_frames: int
 
-@app.post("/generate")
-async def generate_video(prompt: str = Form(...), image_path: str = Form(None)):
+@app.post("/generate-video/")
+async def generate_video(request: VideoRequest):
     try:
-        logger.info(f"Generating video for prompt: {prompt}")
-        if not image_path:
-            image_path = "input/default.jpg"
-        if not os.path.exists(image_path):
-            raise HTTPException(status_code=400, detail="Input image not found")
+        prompt = request.prompt
+        num_frames = request.num_frames
 
-        image = load_image(image_path)
-        device = "cuda"
+        if num_frames <= 0:
+            raise HTTPException(status_code=400, detail="Number of frames must be positive")
+        if num_frames > 100:
+            raise HTTPException(status_code=400, detail="Number of frames cannot exceed 100")
 
-        video_frames = pipe(
+        # Generate frames
+        logger.debug(f"Generating frames with prompt: {prompt}, num_frames: {num_frames}")
+        frames = pipe(
             prompt=prompt,
-            image=image,
-            num_videos_per_prompt=1,
-            num_inference_steps=50,
-            num_frames=49,
-            guidance_scale=6,
-            generator=torch.Generator(device=device).manual_seed(42)
-        ).frames[0]
+            num_frames=num_frames,
+            height=256,
+            width=256,
+            num_inference_steps=50
+        ).frames
+        logger.debug(f"Generated {len(frames)} frames")
 
-        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
-            export_to_video(video_frames, temp_file.name, fps=8)
-            with open(temp_file.name, 'rb') as f:
-                video_content = f.read()
-            os.unlink(temp_file.name)
+        # Create a temporary file for the video
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
+            video_path = temp_file.name
+            frame_rate = 24
+            frame_size = (256, 256)
 
-        return StreamingResponse(
-            io.BytesIO(video_content),
-            media_type="video/mp4",
-            headers={"Content-Disposition": "attachment; filename=generated_video.mp4"}
+            # Write frames to a temporary directory as images
+            temp_dir = tempfile.mkdtemp()
+            for i, frame in enumerate(frames):
+                frame = (frame * 255).astype(np.uint8)
+                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(os.path.join(temp_dir, f"frame_{i:04d}.png"), frame)
+
+            # Use ffmpeg to encode frames into an H.264 video
+            try:
+                ffmpeg.input(
+                    f"{temp_dir}/frame_%04d.png",
+                    framerate=frame_rate
+                ).output(
+                    video_path,
+                    vcodec="libx264",  # Use H.264 codec
+                    pix_fmt="yuv420p",  # Browser-compatible pixel format
+                    r=frame_rate
+                ).run(quiet=True, overwrite_output=True)
+            except ffmpeg.Error as e:
+                logger.error(f"FFmpeg error: {e.stderr.decode()}")
+                raise HTTPException(status_code=500, detail="Video encoding failed")
+            finally:
+                # Clean up temporary frame files
+                for file in os.listdir(temp_dir):
+                    os.remove(os.path.join(temp_dir, file))
+                os.rmdir(temp_dir)
+
+        # Read the video file
+        with open(video_path, "rb") as f:
+            video_binary = f.read()
+
+        # Store in MinIO
+        object_name = f"generated_video_{prompt[:10]}.mp4"
+        minio_client.put_object(
+            bucket_name,
+            object_name,
+            io.BytesIO(video_binary),
+            len(video_binary),
+            content_type="video/mp4"
         )
+        logger.info(f"Video stored in MinIO at {object_name}")
+
+        # Generate presigned URL
+        presigned_url = minio_client.presigned_get_object(bucket_name, object_name)
+
+        # Clean up temporary file
+        os.remove(video_path)
+
+        return {"status": "success", "video_url": presigned_url}
 
     except Exception as e:
         logger.error(f"Error generating video: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002)

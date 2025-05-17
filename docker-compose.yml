@@ -1,168 +1,136 @@
 services:
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.4.0
-    container_name: zookeeper
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: admin1234
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
     networks:
-      - video_processing_net
-
+      - app-network
+    volumes:
+      - minio_data:/data
   kafka:
-    image: confluentinc/cp-kafka:7.4.0
-    container_name: kafka
-    depends_on:
-      - zookeeper
+    image: confluentinc/cp-kafka:latest
+    ports:
+      - "9092:9092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true  # Kept for fallback
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "9092"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - video_processing_net
-  kafka-init:
-    image: confluentinc/cp-kafka:7.4.0
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
     depends_on:
-      kafka:
+      zookeeper:
         condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command: |
-      echo "Waiting for Kafka to be ready..."
-      until kafka-topics --list --bootstrap-server kafka:9092 > /dev/null 2>&1; do
-        echo "Kafka not ready yet, sleeping..."
-        sleep 1
-      done
-      echo "Kafka is ready, creating video-ingestion topic..."
-      kafka-topics --create --topic video-ingestion --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 || {
-        echo "Failed to create topic, checking if it exists..."
-        if ! kafka-topics --list --bootstrap-server kafka:9092 | grep -q video-ingestion; then
-          echo "Topic creation failed and topic does not exist, exiting with error..."
-          exit 1
-        else
-          echo "Topic already exists, proceeding..."
-        fi
-      }
-      echo "Topic creation completed successfully, exiting..."
-    networks:
-      - video_processing_net
-
-  ollama:
-    image: ollama/ollama
-    container_name: ollama
+    healthcheck:
+      test: ["CMD", "nc", "-z", "kafka", "9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     volumes:
-      - ollama_data:/root/.ollama
+      - ./kafka/server.properties:/etc/kafka/server.properties
+    networks:
+      - app-network
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - app-network
+    volumes:
+      - zookeeper_data:/data
+  
+  ollama:
+    image: ollama/ollama:latest
     ports:
       - "11434:11434"
     environment:
-      - OLLAMA_MODELS=gemma:2b
-    command: ["serve"]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 2
-              capabilities: [gpu]
+      OLLAMA_MODELS: "llava:13b,nomic-embed-text:latest"
+    volumes:
+      - ./ollama/entrypoint.sh:/entrypoint.sh
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     networks:
-      - video_processing_net
+      - app-network
 
   ingestion:
     build:
-      context: /home/ubuntu/git/video_ingestion/ingestion
-      dockerfile: Dockerfile
-    container_name: ingestion
-    depends_on:
-      kafka:
-        condition: service_healthy
-      kafka-init:
-        condition: service_completed_successfully
-      ollama:
-        condition: service_started
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-    volumes:
-      - video_storage:/app/videos
+      context: ./ingestion
     ports:
       - "8000:8000"
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: admin1234
+      MINIO_BUCKET: videos
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      minio:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
     networks:
-      - video_processing_net
+      - app-network
 
   storage:
     build:
       context: ./storage
-      dockerfile: Dockerfile
-    container_name: storage
-    depends_on:
-      kafka:
-        condition: service_healthy
-      kafka-init:
-        condition: service_completed_successfully
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - LOCAL_STORAGE_PATH=/app/videos
-      - FAISS_INDEX_PATH=/app/faiss/video_index.faiss
-    volumes:
-      - video_storage:/app/videos
-      - faiss_data:/app/faiss
-    networks:
-      - video_processing_net
-
-  query_alert:
-    build:
-      context: ./query_alert
-      dockerfile: Dockerfile
-    container_name: query_alert
-    depends_on:
-      kafka:
-        condition: service_healthy
-      kafka-init:
-        condition: service_completed_successfully
-      ollama:
-        condition: service_started
-    environment:
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - FAISS_INDEX_PATH=/app/faiss/video_index.faiss
-      - LOCAL_STORAGE_PATH=/app/videos
     ports:
       - "8001:8001"
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: admin1234
+      MINIO_BUCKET: videos
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      FAISS_INDEX_PATH: /app/faiss/video_index.faiss
+    depends_on:
+      minio:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     volumes:
-      - video_storage:/app/videos
       - faiss_data:/app/faiss
     networks:
-      - video_processing_net
-
-  streamlit:
-    build:
-      context: ./streamlit
-      dockerfile: Dockerfile
-    container_name: streamlit
-    depends_on:
-      - ingestion
-      - query_alert
-      - video_gen
-    ports:
-      - "8501:8501"
-    networks:
-      - video_processing_net
+      - app-network
 
   video_gen:
     build:
       context: ./video_gen
-      dockerfile: Dockerfile
-    container_name: video_gen
-    depends_on:
-      - ollama
     ports:
       - "8002:8002"
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: admin1234
+      MINIO_BUCKET: videos
     deploy:
       resources:
         reservations:
@@ -170,21 +138,77 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     volumes:
-      - ./samples:/app/samples
-      - ./input:/app/input
+      - model_cache:/app/cache/models
     networks:
-      - video_processing_net
+      - app-network
 
-volumes:
-  video_storage:
-    name: video_storage
-  faiss_data:
-    name: faiss_data
-  ollama_data:
-    name: ollama_data
+  query_alert:
+    build:
+      context: ./query_alert
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: admin1234
+      MINIO_BUCKET: videos
+      OLLAMA_ENDPOINT: http://ollama:11434
+      STORAGE_ENDPOINT: http://storage:8001
+    depends_on:
+      minio:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  streamlit:
+    build:
+      context: ./streamlit
+    ports:
+      - "8501:8501"
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: admin1234
+      MINIO_BUCKET: videos
+      VIDEO_GEN_ENDPOINT: http://video_gen:8002
+      INGESTION_ENDPOINT: http://ingestion:8000
+      STORAGE_ENDPOINT: http://storage:8001
+      OLLAMA_ENDPOINT: http://ollama:11434
+    depends_on:
+      minio:
+        condition: service_healthy
+      video_gen:
+        condition: service_healthy
+      ingestion:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    networks:
+      - app-network
+    volumes:
+      - faiss_data:/app/faiss
 
 networks:
-  video_processing_net:
-    name: video_processing_net
+  app-network:
     driver: bridge
+
+volumes:
+  zookeeper_data:
+  minio_data:
+  ollama_data:
+  model_cache:
+  faiss_data:

@@ -1,118 +1,64 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
-from confluent_kafka import Producer
-import logging
-import cv2
-import numpy as np
-import requests
-import json
 import os
-from datetime import datetime
-import asyncio
-import websockets
+import uuid
+import json
+from fastapi import FastAPI, File, UploadFile, Form
+from minio import Minio
+from minio.error import S3Error
+from confluent_kafka import Producer
+import io
 
 app = FastAPI()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Initialize MinIO client
+minio_client = Minio(
+    endpoint=os.getenv("MINIO_ENDPOINT", "minio:9000").replace("http://", ""),
+    access_key=os.getenv("MINIO_ACCESS_KEY", "admin"),
+    secret_key=os.getenv("MINIO_SECRET_KEY", "admin1234"),
+    secure=False
+)
+bucket_name = os.getenv("MINIO_BUCKET", "videos")
+try:
+    if not minio_client.bucket_exists(bucket_name):
+        minio_client.make_bucket(bucket_name)
+except S3Error as e:
+    print(f"Error creating bucket: {e}")
 
 # Kafka configuration
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 producer_config = {
-    "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
-    "client.id": "ingestion-producer"
+    "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS
 }
 producer = Producer(producer_config)
 
-# WebSocket configuration for real-time alerts
-ALERT_WS_URL = "ws://streamlit:8501/alert"
-
 def delivery_report(err, msg):
-    """Callback for Kafka message delivery."""
     if err is not None:
-        logger.error(f"Message delivery failed: {err}")
+        print(f"Message delivery failed: {err}")
     else:
-        logger.info(f"Message delivered to {msg.topic()} [{msg.partition()}]")
-
-def detect_objects(frame):
-    """Detect objects in a frame using MiniCPM-V 2.6 via Ollama."""
-    try:
-        _, buffer = cv2.imencode('.jpg', frame)
-        response = requests.post(
-            'http://ollama:11434/api/generate',
-            json={
-                'model': 'minicpm-v:2.6',
-                'prompt': 'Detect objects in this image (e.g., tank, military vehicle, missile, drone, person).',
-                'image': buffer.tobytes().hex()
-            }
-        )
-        response.raise_for_status()
-        objects = response.json().get('objects', [])
-        return objects if objects else []
-    except Exception as e:
-        logger.error(f"Error detecting objects: {str(e)}")
-        return []
-
-async def send_realtime_alert(video_content, timestamp, objects):
-    """Send real-time alert to Streamlit via WebSocket."""
-    if any(obj.lower() in ['drone', 'missile', 'enemy flying object'] for obj in objects):
-        alert_data = {
-            "video_content": video_content.hex(),
-            "timestamp": timestamp,
-            "objects": objects,
-            "geolocation": "White House, 1600 Pennsylvania Ave NW, Washington, DC 20500"
-        }
-        async with websockets.connect(ALERT_WS_URL) as websocket:
-            await websocket.send(json.dumps(alert_data))
-            logger.info(f"Sent alert for {objects} at {timestamp}")
+        print(f"Message delivered to {msg.topic()} [{msg.partition()}]")
 
 @app.post("/ingest")
-async def ingest_video(file: UploadFile = File(...), timestamp: str = Form(None)):
-    """Ingest a video file and send it to Kafka with real-time alerts."""
+async def ingest_video(file: UploadFile = File(...), timestamp: str = Form(...)):
+    # Read file content
+    video_content = await file.read()
+
+    # Store temporarily in MinIO
+    object_name = f"videos/{uuid.uuid4()}.mp4"
     try:
-        # Read video file
-        video_bytes = await file.read()
-        video_array = np.frombuffer(video_bytes, dtype=np.uint8)
-        video = cv2.imdecode(video_array, cv2.IMREAD_COLOR)
-
-        if video is None:
-            raise HTTPException(status_code=400, detail="Invalid video file")
-
-        # Detect objects
-        objects = detect_objects(video)
-
-        # Prepare metadata
-        if timestamp:
-            try:
-                datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid timestamp format. Use YYYY-MM-DD HH:MM:SS")
-        else:
-            timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-
-        metadata = {
-            "video_content": video_bytes.hex(),
-            "timestamp": timestamp,
-            "objects": objects
-        }
-
-        # Send to Kafka
-        producer.produce(
-            topic="video-ingestion",
-            value=json.dumps(metadata).encode('utf-8'),
-            callback=delivery_report
+        minio_client.put_object(
+            bucket_name, object_name, io.BytesIO(video_content), len(video_content),
+            content_type="video/mp4"
         )
-        producer.flush()
+    except S3Error as e:
+        print(f"Error uploading to MinIO: {e}")
+        raise
 
-        # Send real-time alert if applicable
-        await send_realtime_alert(video_bytes, timestamp, objects)
+    # Send to Kafka
+    message = {
+        "video_content": video_content.hex(),
+        "timestamp": timestamp,
+        "minio_object_name": object_name
+    }
+    producer.produce("video-ingestion", json.dumps(message).encode("utf-8"), callback=delivery_report)
+    producer.flush()
 
-        return {"status": "Video ingested", "objects": objects}
-
-    except Exception as e:
-        logger.error(f"Error ingesting video: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    return {"status": "Video ingested", "object_name": object_name}
