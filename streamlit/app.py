@@ -5,6 +5,10 @@ from minio import Minio
 import faiss
 import numpy as np
 import cv2
+from datetime import datetime
+import folium
+from streamlit_folium import folium_static
+import json
 
 # Initialize MinIO client
 minio_client = Minio(
@@ -24,7 +28,7 @@ if os.path.exists(FAISS_INDEX_PATH):
 
 def get_embedding(frame):
     response = requests.post(
-        'http://ollama:11434/api/embeddings',
+        os.getenv("OLLAMA_ENDPOINT", "http://ollama:11434/api/embeddings"),
         json={
             'model': 'nomic-embed-text:latest',
             'prompt': cv2.imencode('.jpg', frame)[1].tobytes().hex()
@@ -32,26 +36,53 @@ def get_embedding(frame):
     )
     return np.array(response.json().get('embedding', []), dtype=np.float32)
 
-def generate_video(prompt, num_frames):
+def generate_video(prompt, num_frames, resolution, aspect_ratio, seed, offload, latitude=None, longitude=None):
     response = requests.post(
-        "http://video_gen:8002/generate-video/",
-        json={"prompt": prompt, "num_frames": num_frames}
+        os.getenv("VIDEO_GEN_ENDPOINT", "http://open_sora_service:8000/generate-video/"),
+        json={
+            "prompt": prompt,
+            "num_frames": num_frames,
+            "resolution": resolution,
+            "aspect_ratio": aspect_ratio,
+            "seed": seed,
+            "offload": offload,
+            "latitude": latitude,
+            "longitude": longitude
+        }
     )
     if response.status_code == 200:
-        return response.json().get("video_url")
+        return response.json().get("video_url"), response.json().get("metadata")
     else:
-        return None
+        return None, None
+
+def get_latest_sightings():
+    try:
+        response = minio_client.get_object(bucket_name, "alerts/latest_sightings.json")
+        data = json.loads(response.read().decode())
+        response.close()
+        response.release_conn()
+        return data.get("metadata", {}).get("sightings", []), data.get("summary", "")
+    except S3Error:
+        return [], "No sightings available."
 
 st.title("Video Processing System")
 
 # Video Generation Tab
 st.header("Video Generation")
-prompt = st.text_input("Enter video prompt")
-num_frames = st.number_input("Number of frames", min_value=1, value=25)
+prompt = st.text_input("Enter video prompt", value="A drone flying over a city")
+num_frames = st.number_input("Number of frames", min_value=1, max_value=120, value=120)
+resolution = st.selectbox("Resolution", ["256px", "768px"], index=0)
+aspect_ratio = st.selectbox("Aspect Ratio", ["1:1", "16:9", "9:16"], index=0)
+seed = st.number_input("Random Seed", min_value=0, value=42)
+offload = st.checkbox("Enable CPU Offloading", value=True)
+latitude = st.number_input("Latitude", min_value=-90.0, max_value=90.0, value=37.7749, step=0.0001)
+longitude = st.number_input("Longitude", min_value=-180.0, max_value=180.0, value=-122.4194, step=0.0001)
+
 if st.button("Generate Video"):
-    video_url = generate_video(prompt, num_frames)
+    video_url, metadata = generate_video(prompt, num_frames, resolution, aspect_ratio, seed, offload, latitude, longitude)
     if video_url:
-        st.write("Generated Video URL:", video_url)  # Debug URL
+        st.write("Generated Video URL:", video_url)
+        st.write("Metadata:", metadata)
         try:
             st.video(video_url)
         except Exception as e:
@@ -61,6 +92,7 @@ if st.button("Generate Video"):
                 unsafe_allow_html=True
             )
         st.session_state["last_video_url"] = video_url
+        st.session_state["last_metadata"] = metadata
     else:
         st.error("Video generation failed")
 
@@ -69,9 +101,9 @@ if "last_video_url" in st.session_state and st.button("Send to Ingestion"):
     response = requests.get(st.session_state["last_video_url"])
     if response.status_code == 200:
         ingest_response = requests.post(
-            "http://ingestion:8000/ingest",
+            os.getenv("INGESTION_ENDPOINT", "http://ingestion:8000/ingest"),
             files={"file": ("video.mp4", response.content, "video/mp4")},
-            data={"timestamp": "2025-05-11 14:00:00"}
+            data={"timestamp": st.session_state["last_metadata"]["timestamp"]}
         )
         if ingest_response.status_code == 200:
             st.success("Video sent to ingestion")
@@ -80,12 +112,25 @@ if "last_video_url" in st.session_state and st.button("Send to Ingestion"):
     else:
         st.error("Failed to fetch video")
 
-# Real-Time Alerts (Placeholder)
+# Real-Time Alerts
 st.header("Real-Time Alerts")
-if "alerts" not in st.session_state:
-    st.session_state["alerts"] = []
-for alert in st.session_state["alerts"]:
-    st.write(alert)
+sightings, summary = get_latest_sightings()
+if sightings:
+    st.subheader("Object Sightings Map")
+    # Create map centered on average coordinates
+    avg_lat = sum(s["latitude"] for s in sightings) / len(sightings) if sightings else 0
+    avg_lon = sum(s["longitude"] for s in sightings) / len(sightings) if sightings else 0
+    m = folium.Map(location=[avg_lat, avg_lon], zoom_start=10)
+    for sighting in sightings:
+        folium.Marker(
+            location=[sighting["latitude"], sighting["longitude"]],
+            popup=f"{sighting['object']} at {sighting['timestamp']}",
+            icon=folium.Icon(color="red" if sighting["object"] == "drone" else "blue")
+        ).add_to(m)
+    folium_static(m)
+    st.write("Summary:", summary)
+else:
+    st.write("No sightings available.")
 
 # Similar Videos Query
 st.header("Find Similar Videos")
@@ -98,8 +143,8 @@ if query_image and st.button("Search"):
         D, I = faiss_index.search(np.array([embedding]), k=5)
         for idx in I[0]:
             if idx >= 0:
-                # Fetch video from MinIO (assumes metadata stores object names)
                 objects = list(minio_client.list_objects(bucket_name, prefix="videos/"))
                 if idx < len(objects):
                     video_url = minio_client.presigned_get_object(bucket_name, objects[idx].object_name)
                     st.video(video_url)
+                    

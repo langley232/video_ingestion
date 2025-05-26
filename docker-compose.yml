@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   minio:
     image: minio/minio:latest
@@ -17,6 +19,7 @@ services:
       - app-network
     volumes:
       - minio_data:/data
+
   kafka:
     image: confluentinc/cp-kafka:latest
     ports:
@@ -55,13 +58,13 @@ services:
       - app-network
     volumes:
       - zookeeper_data:/data
-  
+
   ollama:
     image: ollama/ollama:latest
     ports:
       - "11434:11434"
     environment:
-      OLLAMA_MODELS: "llava:13b,nomic-embed-text:latest"
+      OLLAMA_MODELS: "llava:13b,nomic-embed-text:latest,nemotron-nano:4b"
     volumes:
       - ./ollama/entrypoint.sh:/entrypoint.sh
       - ollama_data:/root/.ollama
@@ -121,16 +124,17 @@ services:
     networks:
       - app-network
 
-  video_gen:
+  open_sora_service:
     build:
-      context: ./video_gen
+      context: ./open_sora_service
     ports:
-      - "8002:8002"
+      - "8002:8000"
     environment:
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: admin
       MINIO_SECRET_KEY: admin1234
       MINIO_BUCKET: videos
+      MINIO_SECURE: "False"
     deploy:
       resources:
         reservations:
@@ -142,13 +146,13 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 60s
     volumes:
-      - model_cache:/app/cache/models
+      - model_cache:/app/open-sora-model-cache
     networks:
       - app-network
 
@@ -182,14 +186,14 @@ services:
       MINIO_ACCESS_KEY: admin
       MINIO_SECRET_KEY: admin1234
       MINIO_BUCKET: videos
-      VIDEO_GEN_ENDPOINT: http://video_gen:8002
+      VIDEO_GEN_ENDPOINT: http://open_sora_service:8000
       INGESTION_ENDPOINT: http://ingestion:8000
       STORAGE_ENDPOINT: http://storage:8001
       OLLAMA_ENDPOINT: http://ollama:11434
     depends_on:
       minio:
         condition: service_healthy
-      video_gen:
+      open_sora_service:
         condition: service_healthy
       ingestion:
         condition: service_healthy

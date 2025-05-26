@@ -4,7 +4,9 @@ import tempfile
 import subprocess
 import shutil
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
+import json
+import random
 
 from fastapi import FastAPI, HTTPException, Body
 from pydantic import BaseModel, Field
@@ -31,7 +33,6 @@ try:
         secret_key=MINIO_SECRET_KEY,
         secure=MINIO_SECURE,
     )
-    # Check if bucket exists, create if not
     found = minio_client.bucket_exists(MINIO_BUCKET)
     if not found:
         minio_client.make_bucket(MINIO_BUCKET)
@@ -40,19 +41,20 @@ try:
         logger.info(f"MinIO bucket '{MINIO_BUCKET}' already exists.")
 except Exception as e:
     logger.error(f"Error initializing MinIO client or ensuring bucket exists: {e}")
-    minio_client = None # Allow app to start, but endpoint will fail
+    minio_client = None
 
 # 3. Request Model (VideoRequest)
 class VideoRequest(BaseModel):
     prompt: str
-    num_frames: int = Field(default=65, description="Number of frames to generate (e.g., 16*4+1 for Open-Sora)")
-    resolution: str = Field(default="256px", pattern="^(256px|768px)$", description="Resolution of the video (256px or 768px)")
+    num_frames: int = Field(default=120, description="Number of frames to generate (120 for 5 seconds at 24 FPS)")
+    resolution: str = Field(default="256px", pattern="^(256px|768px)$", description="Resolution of the video")
     aspect_ratio: str = Field(default="1:1", pattern="^(\d+:\d+)$", description="Aspect ratio (e.g., 16:9, 1:1, 9:16)")
     model_path: str = Field(default="/app/open-sora-model-cache/Open-Sora-v2", description="Path to the Open-Sora model directory")
     opensora_repo_path: str = Field(default="/app/open-sora", description="Path to the cloned Open-Sora repository")
     seed: int = Field(default=42, description="Random seed for generation")
-    offload: bool = Field(default=True, description="Whether to use CPU offloading for model parts")
-
+    offload: bool = Field(default=True, description="Whether to use CPU offloading")
+    latitude: float = Field(default=None, description="Latitude of the video location", allow_none=True)
+    longitude: float = Field(default=None, description="Longitude of the video location", allow_none=True)
 
 # 4. API Endpoint (/generate-video/)
 @app.post("/generate-video/")
@@ -62,19 +64,16 @@ async def generate_video(request: VideoRequest = Body(...)):
 
     temp_output_dir = None
     try:
-        # a. Create a temporary directory for Open-Sora output
         temp_output_dir = tempfile.mkdtemp(prefix="opensora_")
         logger.info(f"Created temporary output directory: {temp_output_dir}")
 
-        # Determine Open-Sora config file based on resolution
         if request.resolution == "256px":
             config_file_name = "t2i2v_256px.py"
         elif request.resolution == "768px":
             config_file_name = "t2i2v_768px.py"
         else:
-            # This should be caught by Pydantic validation, but as a safeguard:
-            raise HTTPException(status_code=400, detail=f"Unsupported resolution: {request.resolution}. Supported: 256px, 768px")
-        
+            raise HTTPException(status_code=400, detail=f"Unsupported resolution: {request.resolution}")
+
         config_path = os.path.join(request.opensora_repo_path, "configs/diffusion/inference", config_file_name)
         inference_script_path = os.path.join(request.opensora_repo_path, "scripts/diffusion/inference.py")
 
@@ -87,9 +86,6 @@ async def generate_video(request: VideoRequest = Body(...)):
         if not os.path.exists(request.model_path):
             raise HTTPException(status_code=500, detail=f"Model path not found: {request.model_path}")
 
-
-        # b. Construct the torchrun command
-        # Using a list of arguments is safer for subprocess
         command = [
             "torchrun",
             "--nproc_per_node", "1",
@@ -97,35 +93,25 @@ async def generate_video(request: VideoRequest = Body(...)):
             inference_script_path,
             config_path,
             "--model-path", request.model_path,
-            "--prompt", request.prompt, # Prompt is a single argument here
+            "--prompt", request.prompt,
             "--num-frames", str(request.num_frames),
             "--aspect_ratio", request.aspect_ratio,
             "--save-dir", temp_output_dir,
             "--sampling_option.seed", str(request.seed),
         ]
         if request.offload:
-            command.append("--offload") # Add --offload only if True
+            command.append("--offload")
 
         logger.info(f"Executing Open-Sora command: {' '.join(command)}")
-
-        # Execute the command
-        process = subprocess.run(command, capture_output=True, text=True, check=False) # check=False to handle errors manually
+        process = subprocess.run(command, capture_output=True, text=True, check=False)
 
         if process.returncode != 0:
             logger.error(f"Open-Sora execution failed. Return code: {process.returncode}")
             logger.error(f"Stdout: {process.stdout}")
             logger.error(f"Stderr: {process.stderr}")
-            raise HTTPException(status_code=500, detail=f"Video generation failed. Error: {process.stderr[:500]}") # Include part of stderr
-        
-        logger.info("Open-Sora execution successful.")
-        logger.debug(f"Stdout: {process.stdout}")
+            raise HTTPException(status_code=500, detail=f"Video generation failed. Error: {process.stderr[:500]}")
 
-
-        # c. Locate Output Video
         video_file_path = None
-        # Open-Sora saves in a nested structure, e.g., save-dir/samples/prompt_slug/video.mp4
-        # The exact subdirectory name can vary based on how Open-Sora sanitizes the prompt for path creation.
-        # We'll search for the first .mp4 file in the temp_output_dir tree.
         for root, dirs, files in os.walk(temp_output_dir):
             for file in files:
                 if file.endswith(".mp4"):
@@ -134,18 +120,30 @@ async def generate_video(request: VideoRequest = Body(...)):
                     break
             if video_file_path:
                 break
-        
+
         if not video_file_path:
-            logger.error(f"Generated video .mp4 file not found in {temp_output_dir} or its subdirectories.")
             raise HTTPException(status_code=500, detail="Video generation completed but output .mp4 file not found.")
 
-        # d. Upload to MinIO
-        sanitized_prompt_prefix = "".join(filter(str.isalnum, request.prompt.lower().split()[:3]))[:50] # Max 50 chars from first 3 words
+        # Generate dynamic metadata
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lat = request.latitude if request.latitude is not None else random.uniform(-90, 90)
+        lon = request.longitude if request.longitude is not None else random.uniform(-180, 180)
+        metadata = {
+            "prompt": request.prompt,
+            "timestamp": timestamp,
+            "latitude": lat,
+            "longitude": lon,
+            "num_frames": request.num_frames,
+            "resolution": request.resolution,
+            "aspect_ratio": request.aspect_ratio,
+            "seed": request.seed
+        }
+
+        # Upload video to MinIO
+        sanitized_prompt_prefix = "".join(filter(str.isalnum, request.prompt.lower().split()[:3]))[:50]
         unique_id = uuid.uuid4()
         object_name = f"generated_videos/{unique_id}_{sanitized_prompt_prefix}.mp4"
-
         try:
-            logger.info(f"Uploading {video_file_path} to MinIO as {object_name} in bucket {MINIO_BUCKET}")
             minio_client.fput_object(
                 MINIO_BUCKET,
                 object_name,
@@ -154,32 +152,37 @@ async def generate_video(request: VideoRequest = Body(...)):
             )
             logger.info(f"Successfully uploaded video to MinIO: {object_name}")
 
-            # Generate a presigned URL for the uploaded object (e.g., valid for 7 days)
+            # Upload metadata to MinIO
+            metadata_object_name = f"metadata/{unique_id}_{sanitized_prompt_prefix}.json"
+            with open("/tmp/metadata.json", "w") as f:
+                json.dump(metadata, f)
+            minio_client.fput_object(
+                MINIO_BUCKET,
+                metadata_object_name,
+                "/tmp/metadata.json",
+                content_type="application/json"
+            )
+            logger.info(f"Successfully uploaded metadata to MinIO: {metadata_object_name}")
+
             presigned_url = minio_client.presigned_get_object(
                 MINIO_BUCKET,
                 object_name,
-                expires=timedelta(days=7) # Adjust expiry as needed
+                expires=timedelta(days=7)
             )
             logger.info(f"Generated presigned URL: {presigned_url}")
 
         except S3Error as s3_err:
             logger.error(f"MinIO S3 Error during upload or URL generation: {s3_err}")
             raise HTTPException(status_code=500, detail=f"MinIO error: {s3_err}")
-        except Exception as e:
-            logger.error(f"An unexpected error occurred during MinIO operation: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to upload video to MinIO: {e}")
 
-        # f. Return success response
-        return {"status": "success", "video_url": presigned_url, "object_name": object_name}
+        return {"status": "success", "video_url": presigned_url, "object_name": object_name, "metadata": metadata}
 
     except HTTPException:
-        # Re-raise HTTPExceptions directly to be handled by FastAPI
         raise
     except Exception as e:
-        logger.exception("An unexpected error occurred in /generate-video/ endpoint") # Logs full stack trace
+        logger.exception("An unexpected error occurred in /generate-video/ endpoint")
         raise HTTPException(status_code=500, detail=f"An unexpected server error occurred: {e}")
     finally:
-        # e. Cleanup: Remove the temporary output directory
         if temp_output_dir and os.path.exists(temp_output_dir):
             try:
                 shutil.rmtree(temp_output_dir)
@@ -191,8 +194,3 @@ async def generate_video(request: VideoRequest = Body(...)):
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
-
-if __name__ == "__main__":
-    import uvicorn
-    # This is for local development/testing; Docker CMD will run uvicorn directly
-    uvicorn.run(app, host="0.0.0.0", port=8000)

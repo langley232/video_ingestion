@@ -3,4 +3,6 @@ requests
 minio
 faiss-cpu
 numpy
-opencv-python>=4.10.0
+opencv-python
+streamlit-folium
+folium

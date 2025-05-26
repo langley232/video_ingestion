@@ -66,7 +66,7 @@ WORKDIR /app
 
 # Copy Python environment from builder
 # This includes Open-Sora and its dependencies
-COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy downloaded model
@@ -85,3 +85,4 @@ EXPOSE 8000
 
 # Command to run the FastAPI application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
