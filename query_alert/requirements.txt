@@ -1,3 +1,4 @@
 requests==2.31.0
 minio==7.2.9
 pillow==10.4.0
+streamlit
