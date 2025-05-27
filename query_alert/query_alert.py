@@ -1,123 +1,193 @@
-import streamlit as st
-import requests
+from fastapi import FastAPI
 import os
-from minio import Minio
-import faiss
-import numpy as np
+import time
 import cv2
-from datetime import datetime
+import tempfile
+import json
+import requests
+from minio import Minio
+from minio.error import S3Error
+import logging
+import numpy as np
+import base64
 
-# Initialize MinIO client
+app = FastAPI()
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 minio_client = Minio(
-    os.getenv("MINIO_ENDPOINT", "minio:9000").replace("http://", ""),
+    endpoint=os.getenv("MINIO_ENDPOINT", "minio:9000").replace("http://", ""),
     access_key=os.getenv("MINIO_ACCESS_KEY", "admin"),
     secret_key=os.getenv("MINIO_SECRET_KEY", "admin1234"),
     secure=False
 )
 bucket_name = os.getenv("MINIO_BUCKET", "videos")
 
-# Initialize FAISS index
-FAISS_INDEX_PATH = "/app/faiss/video_index.faiss"
-dimension = 512
-faiss_index = faiss.IndexFlatL2(dimension)
-if os.path.exists(FAISS_INDEX_PATH):
-    faiss_index = faiss.read_index(FAISS_INDEX_PATH)
+try:
+    if not minio_client.bucket_exists(bucket_name):
+        minio_client.make_bucket(bucket_name)
+        logger.info(f"Created MinIO bucket: {bucket_name}")
+except S3Error as e:
+    logger.error(f"Error creating MinIO bucket: {str(e)}")
+    raise
 
-def get_embedding(frame):
-    response = requests.post(
-        os.getenv("OLLAMA_ENDPOINT", "http://ollama:11434/api/embeddings"),
-        json={
-            'model': 'nomic-embed-text:latest',
-            'prompt': cv2.imencode('.jpg', frame)[1].tobytes().hex()
+ollama_endpoint = os.getenv("OLLAMA_ENDPOINT", "http://ollama:11434")
+llava_model = "llava:13b"
+summary_model = "nomic-embed-text:latest"
+
+storage_endpoint = os.getenv("STORAGE_ENDPOINT", "http://storage:8001")
+
+def extract_frame(video_data):
+    with tempfile.NamedTemporaryFile(suffix=".mp4") as temp_file:
+        temp_file.write(video_data)
+        temp_file.flush()
+        cap = cv2.VideoCapture(temp_file.name)
+        ret, frame = cap.read()
+        cap.release()
+        if ret:
+            _, buffer = cv2.imencode('.jpg', frame)
+            return buffer.tobytes()
+        return None
+
+def analyze_frame(frame_data: bytes) -> dict:
+    try:
+        img_base64 = base64.b64encode(frame_data).decode("utf-8")
+        payload = {
+            "model": llava_model,
+            "prompt": "Detect objects in the image. Look for drones, people (e.g., resembling Tom Cruise), or other suspicious objects. Return a JSON with detected objects and confidence scores.",
+            "images": [img_base64],
+            "format": "json"
         }
-    )
-    return np.array(response.json().get('embedding', []), dtype=np.float32)
+        response = requests.post(f"{ollama_endpoint}/api/generate", json=payload, timeout=30)
+        response.raise_for_status()
+        result = json.loads(response.text.split('\n')[-2])['response']
+        return json.loads(result)
+    except Exception as e:
+        logger.error(f"Error analyzing frame: {str(e)}")
+        return {"objects": [], "error": str(e)}
 
-def generate_video(prompt, num_frames, resolution, aspect_ratio, seed, offload, latitude=None, longitude=None):
-    response = requests.post(
-        os.getenv("VIDEO_GEN_ENDPOINT", "http://open_sora_service:8000/generate-video/"),
-        json={
-            "prompt": prompt,
-            "num_frames": num_frames,
-            "resolution": resolution,
-            "aspect_ratio": aspect_ratio,
-            "seed": seed,
-            "offload": offload,
-            "latitude": latitude,
-            "longitude": longitude
+def query_similar_videos(embedding: list) -> list:
+    try:
+        payload = {"embedding": embedding}
+        response = requests.post(f"{storage_endpoint}/search", json=payload, timeout=10)
+        response.raise_for_status()
+        return response.json().get("similar_videos", [])
+    except Exception as e:
+        logger.error(f"Error querying similar videos: {str(e)}")
+        return []
+
+def summarize_sightings(sightings: list) -> str:
+    try:
+        prompt = f"Summarize the following sightings of objects (drones or people resembling Tom Cruise) with their timestamps and locations:\n{json.dumps(sightings, indent=2)}\nProvide a concise summary in natural language."
+        payload = {
+            "model": summary_model,
+            "prompt": prompt
         }
-    )
-    if response.status_code == 200:
-        return response.json().get("video_url"), response.json().get("metadata")
-    else:
-        return None, None
+        response = requests.post(f"{ollama_endpoint}/api/generate", json=payload, timeout=30)
+        response.raise_for_status()
+        result = json.loads(response.text.split('\n')[-2])['response']
+        return result
+    except Exception as e:
+        logger.error(f"Error summarizing sightings: {str(e)}")
+        return "Failed to summarize sightings."
 
-st.title("Video Processing System")
+def store_alert(video_path: str, objects: list, similar_videos: list, metadata: dict, summary: str):
+    try:
+        alert_data = {
+            "video_path": video_path,
+            "objects": objects,
+            "similar_videos": similar_videos,
+            "metadata": metadata,
+            "summary": summary,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        alert_path = f"alerts/alert_{int(time.time())}.json"
+        with open("/tmp/alert.json", "w") as f:
+            json.dump(alert_data, f)
+        minio_client.fput_object(bucket_name, alert_path, "/tmp/alert.json")
+        logger.info(f"Stored alert: {alert_path}")
+        return alert_data
+    except S3Error as e:
+        logger.error(f"Error storing alert: {str(e)}")
+        return None
 
-# Video Generation Tab
-st.header("Video Generation")
-prompt = st.text_input("Enter video prompt", value="A drone flying over a city")
-num_frames = st.number_input("Number of frames", min_value=1, max_value=120, value=120)
-resolution = st.selectbox("Resolution", ["256px", "768px"], index=0)
-aspect_ratio = st.selectbox("Aspect Ratio", ["1:1", "16:9", "9:16"], index=0)
-seed = st.number_input("Random Seed", min_value=0, value=42)
-offload = st.checkbox("Enable CPU Offloading", value=True)
-latitude = st.number_input("Latitude", min_value=-90.0, max_value=90.0, value=37.7749, step=0.0001)
-longitude = st.number_input("Longitude", min_value=-180.0, max_value=180.0, value=-122.4194, step=0.0001)
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
 
-if st.button("Generate Video"):
-    video_url, metadata = generate_video(prompt, num_frames, resolution, aspect_ratio, seed, offload, latitude, longitude)
-    if video_url:
-        st.write("Generated Video URL:", video_url)
-        st.write("Metadata:", metadata)
+def main():
+    last_processed = None
+    while True:
         try:
-            st.video(video_url)
+            objects = minio_client.list_objects(bucket_name, prefix="generated_videos/", recursive=True)
+            sightings = []
+            for obj in objects:
+                if last_processed and obj.last_modified <= last_processed:
+                    continue
+                logger.info(f"Processing video: {obj.object_name}")
+
+                response = minio_client.get_object(bucket_name, obj.object_name)
+                video_data = response.read()
+                response.close()
+                response.release_conn()
+
+                frame_data = extract_frame(video_data)
+                if not frame_data:
+                    logger.warning(f"Failed to extract frame from {obj.object_name}")
+                    continue
+
+                analysis = analyze_frame(frame_data)
+                objects_detected = analysis.get("objects", [])
+
+                suspicious = [obj for obj in objects_detected if obj["name"] in ["drone", "Tom Cruise"] and obj["confidence"] > 0.7]
+                if suspicious:
+                    metadata_path = f"metadata/{obj.object_name.split('/')[-1].replace('.mp4', '.json')}"
+                    try:
+                        metadata_response = minio_client.get_object(bucket_name, metadata_path)
+                        metadata = json.loads(metadata_response.read().decode())
+                        metadata_response.close()
+                        metadata_response.release_conn()
+                    except S3Error:
+                        metadata = {"timestamp": time.strftime("%Y-%m-%d %H:%M:%S"), "latitude": 0.0, "longitude": 0.0}
+
+                    embedding_response = requests.post(
+                        f"{ollama_endpoint}/api/embeddings",
+                        json={
+                            "model": "nomic-embed-text:latest",
+                            "prompt": f"Video with objects: {', '.join([o['name'] for o in suspicious])}"
+                        },
+                        timeout=20
+                    )
+                    embedding_response.raise_for_status()
+                    embedding = embedding_response.json().get("embedding", [])
+
+                    similar_videos = query_similar_videos(embedding)
+
+                    for obj in suspicious:
+                        sightings.append({
+                            "object": obj["name"],
+                            "confidence": obj["confidence"],
+                            "video_path": obj.object_name,
+                            "timestamp": metadata["timestamp"],
+                            "latitude": metadata["latitude"],
+                            "longitude": metadata["longitude"]
+                        })
+
+                last_processed = obj.last_modified
+
+            if sightings:
+                summary = summarize_sightings(sightings)
+                alert_data = store_alert("multiple_videos", suspicious, similar_videos, {"sightings": sightings}, summary)
+                if alert_data:
+                    minio_client.fput_object(bucket_name, "alerts/latest_sightings.json", "/tmp/alert.json")
+
+        except S3Error as e:
+            logger.error(f"MinIO error: {str(e)}")
         except Exception as e:
-            st.warning("st.video failed, trying HTML video tag...")
-            st.markdown(
-                f'<video width="320" height="240" controls><source src="{video_url}" type="video/mp4">Your browser does not support the video tag.</video>',
-                unsafe_allow_html=True
-            )
-        st.session_state["last_video_url"] = video_url
-        st.session_state["last_metadata"] = metadata
-    else:
-        st.error("Video generation failed")
+            logger.error(f"Error in main loop: {str(e)}")
+        time.sleep(10)
 
-# Ingestion
-if "last_video_url" in st.session_state and st.button("Send to Ingestion"):
-    response = requests.get(st.session_state["last_video_url"])
-    if response.status_code == 200:
-        ingest_response = requests.post(
-            os.getenv("INGESTION_ENDPOINT", "http://ingestion:8000/ingest"),
-            files={"file": ("video.mp4", response.content, "video/mp4")},
-            data={"timestamp": st.session_state["last_metadata"]["timestamp"]}
-        )
-        if ingest_response.status_code == 200:
-            st.success("Video sent to ingestion")
-        else:
-            st.error("Ingestion failed")
-    else:
-        st.error("Failed to fetch video")
-
-# Real-Time Alerts (Placeholder)
-st.header("Real-Time Alerts")
-if "alerts" not in st.session_state:
-    st.session_state["alerts"] = []
-for alert in st.session_state["alerts"]:
-    st.write(alert)
-
-# Similar Videos Query
-st.header("Find Similar Videos")
-query_image = st.file_uploader("Upload an image to find similar videos", type=["jpg", "png"])
-if query_image and st.button("Search"):
-    img_array = np.frombuffer(query_image.read(), np.uint8)
-    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-    embedding = get_embedding(img)
-    if embedding is not None:
-        D, I = faiss_index.search(np.array([embedding]), k=5)
-        for idx in I[0]:
-            if idx >= 0:
-                objects = list(minio_client.list_objects(bucket_name, prefix="videos/"))
-                if idx < len(objects):
-                    video_url = minio_client.presigned_get_object(bucket_name, objects[idx].object_name)
-                    st.video(video_url)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8003)

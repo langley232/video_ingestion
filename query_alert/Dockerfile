@@ -2,17 +2,19 @@ FROM python:3.10-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
+# Install system dependencies for OpenCV
 RUN apt-get update && apt-get install -y \
     python3-pip \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up Python environment
-RUN pip3 install --upgrade pip
+RUN pip3 install --no-cache-dir --upgrade pip
 
 # Install Python dependencies
 COPY requirements.txt /app/requirements.txt
-RUN pip3 install -r /app/requirements.txt
+RUN pip3 install --no-cache-dir -r /app/requirements.txt
 
 # Set working directory and permissions
 WORKDIR /app
@@ -26,4 +28,4 @@ RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
 
 # Set entrypoint
-CMD ["python3", "query_alert.py"]
+CMD ["uvicorn", "query_alert:app", "--host", "0.0.0.0", "--port", "8003"]

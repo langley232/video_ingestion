@@ -1,4 +1,7 @@
+fastapi==0.115.0
+uvicorn==0.31.0
 requests==2.31.0
 minio==7.2.9
-pillow==10.4.0
-streamlit
+opencv-python==4.10.0
+numpy==1.26.4
+faiss-cpu==1.9.0
