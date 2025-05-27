@@ -30,9 +30,6 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-    depends_on:
-      zookeeper:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "nc", "-z", "kafka", "9092"]
       interval: 30s
@@ -64,16 +61,25 @@ services:
     ports:
       - "11434:11434"
     environment:
-      OLLAMA_MODELS: "llava:13b,nomic-embed-text:latest,nemotron-nano:4b"
+      OLLAMA_MODELS: "llava:13b,nomic-embed-text:latest"
+      OLLAMA_HOST: "0.0.0.0:11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     volumes:
       - ./ollama/entrypoint.sh:/entrypoint.sh
       - ollama_data:/root/.ollama
+    entrypoint: ["/entrypoint.sh"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 300s
     networks:
       - app-network
 
@@ -88,11 +94,12 @@ services:
       MINIO_SECRET_KEY: admin1234
       MINIO_BUCKET: videos
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-    depends_on:
-      minio:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     networks:
       - app-network
 
@@ -108,19 +115,22 @@ services:
       MINIO_BUCKET: videos
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       FAISS_INDEX_PATH: /app/faiss/video_index.faiss
-    depends_on:
-      minio:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
+      OLLAMA_ENDPOINT: http://ollama:11434
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 120s
     volumes:
       - faiss_data:/app/faiss
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     networks:
       - app-network
 
@@ -142,15 +152,12 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    depends_on:
-      minio:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     volumes:
       - model_cache:/app/open-sora-model-cache
     networks:
@@ -166,13 +173,12 @@ services:
       MINIO_BUCKET: videos
       OLLAMA_ENDPOINT: http://ollama:11434
       STORAGE_ENDPOINT: http://storage:8001
-    depends_on:
-      minio:
-        condition: service_healthy
-      ollama:
-        condition: service_healthy
-      storage:
-        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     networks:
       - app-network
 
@@ -190,17 +196,12 @@ services:
       INGESTION_ENDPOINT: http://ingestion:8000
       STORAGE_ENDPOINT: http://storage:8001
       OLLAMA_ENDPOINT: http://ollama:11434
-    depends_on:
-      minio:
-        condition: service_healthy
-      open_sora_service:
-        condition: service_healthy
-      ingestion:
-        condition: service_healthy
-      storage:
-        condition: service_healthy
-      ollama:
-        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     networks:
       - app-network
     volumes:
