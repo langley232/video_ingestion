@@ -1,7 +1,0 @@
-fastapi
-uvicorn[standard]
-python-multipart
-minio
-huggingface_hub
-# modelscope can be added if direct interaction from the API layer is needed,
-# but Open-Sora's setup within the Dockerfile should handle its core usage.

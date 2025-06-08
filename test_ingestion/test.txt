@@ -1,0 +1,175 @@
+#option A: Simple File Loop
+python video_stream_simulator.py --file your_test_video.mp4 --loop --fps 24
+
+Option B: OBS Studio → RTMP
+
+Install OBS Studio on your local machine
+Set up RTMP output to rtmp://your-vm-ip:1935/live/drone_feed
+Stream screen capture, webcam, or video files
+
+Option C: FFmpeg Direct Streaming
+# Stream a video file via RTMP
+ffmpeg -re -i input_video.mp4 -c copy -f flv rtmp://your-vm-ip:1935/live/drone_feed
+
+# Stream from webcam
+ffmpeg -f v4l2 -i /dev/video0 -c:v libx264 -preset ultrafast -tune zerolatency -f flv rtmp://your-vm-ip:1935/live/drone_feed
+
+Option D: Synthetic Video Generation
+Create a service that generates synthetic drone footage with GPS coordinates:
+
+import cv2
+import numpy as np
+import time
+import requests
+import json
+from datetime import datetime
+import random
+import math
+
+class SyntheticDroneStreamGenerator:
+    def __init__(self, ingestion_endpoint="http://localhost:8000"):
+        self.ingestion_endpoint = ingestion_endpoint
+        self.frame_width = 1280
+        self.frame_height = 720
+        
+    def generate_drone_footage(self, duration_minutes=60, fps=24):
+        """Generate synthetic drone footage with moving objects"""
+        
+        # Starting GPS coordinates (San Francisco)
+        start_lat = 37.7749
+        start_lon = -122.4194
+        
+        # Movement parameters
+        speed_kmh = 50  # Drone speed
+        altitude = 100  # meters
+        
+        total_frames = duration_minutes * 60 * fps
+        frame_count = 0
+        
+        print(f"Generating {total_frames} frames of synthetic drone footage...")
+        
+        while frame_count < total_frames:
+            # Create synthetic frame
+            frame = self._create_synthetic_frame(frame_count, fps)
+            
+            # Calculate GPS position (simulate movement)
+            time_elapsed = frame_count / fps  # seconds
+            distance_km = (speed_kmh * time_elapsed) / 3600
+            
+            # Simple linear movement (you can make this more complex)
+            lat_offset = distance_km * 0.01  # Rough conversion
+            lon_offset = distance_km * 0.01
+            
+            current_lat = start_lat + lat_offset
+            current_lon = start_lon + lon_offset
+            
+            # Add some randomness to simulate realistic drone movement
+            current_lat += random.uniform(-0.0001, 0.0001)
+            current_lon += random.uniform(-0.0001, 0.0001)
+            
+            # Encode frame as video
+            _, buffer = cv2.imencode('.mp4', frame, [
+                cv2.IMWRITE_JPEG_QUALITY, 85
+            ])
+            video_chunk = buffer.tobytes()
+            
+            # Metadata
+            metadata = {
+                "timestamp": datetime.now().isoformat(),
+                "frame_number": frame_count,
+                "latitude": current_lat,
+                "longitude": current_lon,
+                "altitude": altitude,
+                "speed_kmh": speed_kmh,
+                "source": "synthetic_drone",
+                "scenario": "city_patrol"
+            }
+            
+            # Send to ingestion
+            try:
+                response = requests.post(
+                    f"{self.ingestion_endpoint}/ingest",
+                    files={
+                        "file": (f"drone_frame_{frame_count:06d}.mp4", video_chunk, "video/mp4")
+                    },
+                    data={"timestamp": metadata["timestamp"]},
+                    timeout=3
+                )
+                
+                if response.status_code == 200:
+                    if frame_count % 100 == 0:
+                        print(f"Sent frame {frame_count}/{total_frames} - GPS: {current_lat:.6f}, {current_lon:.6f}")
+                else:
+                    print(f"Failed to send frame {frame_count}: {response.status_code}")
+                    
+            except Exception as e:
+                print(f"Error sending frame {frame_count}: {e}")
+                
+            frame_count += 1
+            time.sleep(1.0 / fps)  # Maintain framerate
+            
+    def _create_synthetic_frame(self, frame_number, fps):
+        """Create a synthetic drone view frame"""
+        # Create base cityscape
+        frame = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
+        
+        # Sky gradient
+        for y in range(self.frame_height // 3):
+            color_intensity = int(135 + (y * 120) / (self.frame_height // 3))
+            frame[y, :] = [color_intensity, color_intensity, 255]
+            
+        # Ground/buildings
+        for y in range(self.frame_height // 3, self.frame_height):
+            color_intensity = int(50 + random.randint(-10, 10))
+            frame[y, :] = [color_intensity, color_intensity + 20, color_intensity]
+            
+        # Add moving objects
+        self._add_moving_objects(frame, frame_number, fps)
+        
+        # Add drone overlay effects
+        self._add_drone_overlay(frame, frame_number)
+        
+        return frame
+        
+    def _add_moving_objects(self, frame, frame_number, fps):
+        """Add moving objects like cars, people, or other drones"""
+        
+        # Moving car
+        car_x = int((frame_number * 3) % self.frame_width)
+        car_y = int(self.frame_height * 0.7)
+        cv2.rectangle(frame, (car_x, car_y), (car_x + 30, car_y + 15), (0, 0, 255), -1)
+        
+        # Suspicious drone (occasionally)
+        if frame_number % (fps * 10) < fps * 2:  # Appear every 10 seconds for 2 seconds
+            drone_x = int(self.frame_width * 0.6 + 50 * math.sin(frame_number * 0.1))
+            drone_y = int(self.frame_height * 0.4 + 20 * math.cos(frame_number * 0.1))
+            
+            # Draw suspicious drone
+            cv2.circle(frame, (drone_x, drone_y), 8, (0, 255, 255), -1)
+            cv2.circle(frame, (drone_x, drone_y), 12, (0, 255, 0), 2)
+            
+        # Tom Cruise-like figure (rarely)
+        if frame_number % (fps * 30) < fps:  # Appear every 30 seconds for 1 second
+            person_x = int(self.frame_width * 0.3)
+            person_y = int(self.frame_height * 0.8)
+            
+            # Simple person silhouette
+            cv2.rectangle(frame, (person_x, person_y - 20), (person_x + 10, person_y), (255, 255, 255), -1)
+            cv2.circle(frame, (person_x + 5, person_y - 25), 5, (255, 200, 180), -1)
+            
+    def _add_drone_overlay(self, frame, frame_number):
+        """Add drone camera overlay elements"""
+        # Crosshair
+        center_x, center_y = self.frame_width // 2, self.frame_height // 2
+        cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (0, 255, 0), 1)
+        cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (0, 255, 0), 1)
+        
+        # HUD elements
+        cv2.putText(frame, f"ALT: 100m", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
+        cv2.putText(frame, f"SPD: 50km/h", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
+        cv2.putText(frame, f"FRAME: {frame_number}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
+
+if __name__ == "__main__":
+    generator = SyntheticDroneStreamGenerator("http://localhost:8000")
+    generator.generate_drone_footage(duration_minutes=10, fps=24)
+

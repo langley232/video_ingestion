@@ -1,0 +1,91 @@
+# Modified docker-compose.yml sections for GPU allocation
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_MODELS: "llava:13b,nomic-embed-text:latest"
+      OLLAMA_HOST: "0.0.0.0:11434"
+      CUDA_VISIBLE_DEVICES: "0"  # Use first GPU for LLaVA
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]  # Specify GPU 0
+              capabilities: [gpu]
+    volumes:
+      - ./ollama/entrypoint.sh:/entrypoint.sh
+      - ollama_data:/root/.ollama
+    entrypoint: ["/entrypoint.sh"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - app-network
+
+  storage:
+    build:
+      context: ./storage
+    ports:
+      - "8001:8001"
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: admin1234
+      MINIO_BUCKET: videos
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      FAISS_INDEX_PATH: /app/faiss/video_index.faiss
+      OLLAMA_ENDPOINT: http://ollama:11434
+      CUDA_VISIBLE_DEVICES: "1"  # Use second GPU for embeddings/FAISS
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    volumes:
+      - faiss_data:/app/faiss
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]  # Specify GPU 1
+              capabilities: [gpu]
+    networks:
+      - app-network
+
+  open_sora_service:
+    build:
+      context: ./open_sora_service
+    ports:
+      - "8002:8000"
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: admin1234
+      MINIO_BUCKET: videos
+      MINIO_SECURE: "False"
+      CUDA_VISIBLE_DEVICES: "1"  # Share GPU 1 with storage service
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]  # Specify GPU 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - model_cache:/app/open-sora-model-cache
+    networks:
+      - app-network
