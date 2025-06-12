@@ -59,7 +59,7 @@ services:
     ports:
       - "11434:11434"
     environment:
-      OLLAMA_MODELS: "llava:13b,nomic-embed-text:latest"
+      OLLAMA_MODELS: "paligemma-2-mix:latest,nomic-embed-text:latest"
       OLLAMA_HOST: "0.0.0.0:11434"
     deploy:
       resources:
@@ -198,6 +198,23 @@ services:
       - app-network
     volumes:
       - faiss_data:/app/faiss
+
+  audio_backend:
+    build:
+      context: ./audio_api/backend
+      dockerfile: Dockerfile
+    environment:
+      - ELEVENLABS_API_KEY=sk_a12b076d3f9c4f02ef432a874ebe914fac0309d259a1fea9
+    ports:
+      - "8003:8000" # Expose on host port 8003, container port 8000
+    networks:
+      - app-network # Ensure it's on the same network as other services
+    healthcheck: # Optional: Add a healthcheck
+       test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+       interval: 30s
+       timeout: 10s
+       retries: 3
+       start_period: 30s
 
 networks:
   app-network:

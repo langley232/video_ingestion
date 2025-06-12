@@ -37,6 +37,7 @@ llava_model = "llava:13b"
 summary_model = "nomic-embed-text:latest"
 
 storage_endpoint = os.getenv("STORAGE_ENDPOINT", "http://storage:8001")
+AUDIO_BACKEND_ENDPOINT = os.getenv("AUDIO_BACKEND_ENDPOINT", "http://audio_backend:8000")
 
 def extract_frame(video_data):
     with tempfile.NamedTemporaryFile(suffix=".mp4") as temp_file:
@@ -94,13 +95,40 @@ def summarize_sightings(sightings: list) -> str:
 
 def store_alert(video_path: str, objects: list, similar_videos: list, metadata: dict, summary: str):
     try:
+        alert_text_for_speech = summary # Use the generated summary for TTS
+        audio_synthesis_status = "not_attempted"
+
+        if alert_text_for_speech:
+            try:
+                logger.info(f"Attempting text-to-speech for alert: {alert_text_for_speech[:50]}...") # Log first 50 chars
+                tts_payload = {"text": alert_text_for_speech}
+                # Using default voice, model, etc., as defined in audio_backend
+                response = requests.post(f"{AUDIO_BACKEND_ENDPOINT}/synthesize/", json=tts_payload, timeout=20)
+
+                if response.status_code == 200:
+                    # We are not saving the audio bytes here, just noting success.
+                    # The audio is streamed by audio_backend but not stored by query_alert.
+                    audio_synthesis_status = "successful"
+                    logger.info("Text-to-speech synthesis successful.")
+                    # If we were to save it, this is where we'd handle response.content
+                else:
+                    audio_synthesis_status = f"failed_status_{response.status_code}"
+                    logger.error(f"Text-to-speech synthesis failed with status {response.status_code}: {response.text}")
+            except requests.exceptions.RequestException as e:
+                audio_synthesis_status = "failed_exception"
+                logger.error(f"Text-to-speech synthesis request failed: {str(e)}")
+        else:
+            audio_synthesis_status = "no_text_provided"
+            logger.info("No alert text provided for speech synthesis.")
+
         alert_data = {
             "video_path": video_path,
             "objects": objects,
             "similar_videos": similar_videos,
             "metadata": metadata,
             "summary": summary,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "audio_synthesis_status": audio_synthesis_status # Add status to alert data
         }
         alert_path = f"alerts/alert_{int(time.time())}.json"
         with open("/tmp/alert.json", "w") as f:
