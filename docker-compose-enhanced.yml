@@ -5,7 +5,7 @@
     ports:
       - "11434:11434"
     environment:
-      OLLAMA_MODELS: "llava:13b,nomic-embed-text:latest"
+      OLLAMA_MODELS: "paligemma-2-mix:latest,nomic-embed-text:latest"
       OLLAMA_HOST: "0.0.0.0:11434"
       CUDA_VISIBLE_DEVICES: "0"  # Use first GPU for LLaVA
     deploy:

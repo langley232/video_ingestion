@@ -132,35 +132,6 @@ services:
     networks:
       - app-network
 
-  open_sora_service:
-    build:
-      context: ./open_sora_service
-    ports:
-      - "8002:8000"
-    environment:
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: admin
-      MINIO_SECRET_KEY: admin1234
-      MINIO_BUCKET: videos
-      MINIO_SECURE: "False"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    volumes:
-      - model_cache:/app/open-sora-model-cache
-    networks:
-      - app-network
-
   query_alert:
     build:
       context: ./query_alert
@@ -184,7 +155,6 @@ services:
       MINIO_ACCESS_KEY: admin
       MINIO_SECRET_KEY: admin1234
       MINIO_BUCKET: videos
-      VIDEO_GEN_ENDPOINT: http://open_sora_service:8000
       INGESTION_ENDPOINT: http://ingestion:8000
       STORAGE_ENDPOINT: http://storage:8001
       OLLAMA_ENDPOINT: http://ollama:11434
@@ -224,6 +194,5 @@ volumes:
   zookeeper_data:
   minio_data:
   ollama_data:
-  model_cache:
   faiss_data:
 

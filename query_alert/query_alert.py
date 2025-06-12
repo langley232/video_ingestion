@@ -33,7 +33,7 @@ except S3Error as e:
     raise
 
 ollama_endpoint = os.getenv("OLLAMA_ENDPOINT", "http://ollama:11434")
-llava_model = "llava:13b"
+vision_model_name = "paligemma-2-mix:latest" # Changed from llava_model
 summary_model = "nomic-embed-text:latest"
 
 storage_endpoint = os.getenv("STORAGE_ENDPOINT", "http://storage:8001")
@@ -55,7 +55,7 @@ def analyze_frame(frame_data: bytes) -> dict:
     try:
         img_base64 = base64.b64encode(frame_data).decode("utf-8")
         payload = {
-            "model": llava_model,
+            "model": vision_model_name, # Changed from llava_model
             "prompt": "Detect objects in the image. Look for drones, people (e.g., resembling Tom Cruise), or other suspicious objects. Return a JSON with detected objects and confidence scores.",
             "images": [img_base64],
             "format": "json"

@@ -16,7 +16,6 @@ MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000").replace("http:
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "admin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "admin1234")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "videos")
-VIDEO_GEN_ENDPOINT = os.getenv("VIDEO_GEN_ENDPOINT", "http://open_sora_service:8000")
 INGESTION_ENDPOINT = os.getenv("INGESTION_ENDPOINT", "http://ingestion:8000")
 STORAGE_ENDPOINT = os.getenv("STORAGE_ENDPOINT", "http://storage:8001")
 OLLAMA_ENDPOINT = os.getenv("OLLAMA_ENDPOINT", "http://ollama:11434")
@@ -169,85 +168,6 @@ if prompt_chat := st.chat_input("Ask about recent alerts or sightings (uses gene
     with st.chat_message("assistant"):
         st.markdown(result)
 
-# --- Video Generation Section ---
-st.header("Video Generation (AI)")
-prompt_gen = st.text_input("Enter AI video prompt", value="A drone flying over Central Park, New York City") # Changed label slightly
-num_frames_gen = st.number_input("Number of frames for AI video", min_value=1, max_value=120, value=60) # Changed variable name for clarity
-resolution_gen = st.selectbox("Resolution for AI video", ["256px", "512px", "768px"], index=1)  # Changed variable name
-aspect_ratio_gen = st.selectbox("Aspect Ratio for AI video", ["1:1", "16:9", "9:16", "4:3", "3:4"], index=1) # Changed variable name
-seed_gen = st.number_input("Random Seed for AI video", min_value=0, value=42) # Changed variable name
-offload_gen = st.checkbox("Enable CPU Offloading for AI video (if GPU memory is low)", value=True) # Changed variable name
-gen_latitude = st.number_input("Latitude (for AI video)", min_value=-90.0, max_value=90.0, value=CENTRAL_PARK_LAT, step=0.0001, format="%.4f")
-gen_longitude = st.number_input("Longitude (for AI video)", min_value=-180.0, max_value=180.0, value=CENTRAL_PARK_LON, step=0.0001, format="%.4f")
-
-if st.button("Generate AI Video"): # Changed button label
-    st.info("AI Video generation started... this may take a while.")
-    try:
-        response = requests.post(
-            f"{VIDEO_GEN_ENDPOINT}/generate-video/",
-            json={
-                "prompt": prompt_gen,
-                "num_frames": num_frames_gen,
-                "resolution": resolution_gen,
-                "aspect_ratio": aspect_ratio_gen,
-                "seed": seed_gen,
-                "offload": offload_gen,
-                "latitude": gen_latitude,
-                "longitude": gen_longitude
-            },
-            timeout=300
-        )
-        response.raise_for_status()
-        data = response.json()
-        video_url = data.get("video_url")
-        metadata = data.get("metadata")
-        if video_url:
-            st.success("AI Video generated successfully!")
-            st.write("Generated AI Video URL:", video_url)
-            st.write("Associated Metadata:", metadata)
-            st.video(video_url)
-            st.session_state["last_video_url"] = video_url
-            st.session_state["last_metadata"] = metadata
-        else:
-            st.error(f"AI Video generation failed. Response: {data}")
-    except requests.exceptions.Timeout:
-        st.error("AI Video generation timed out. The process might be continuing in the background.")
-    except Exception as e:
-        st.error(f"Error during AI video generation: {str(e)}")
-
-# --- Ingestion of Generated Video ---
-if "last_video_url" in st.session_state and st.button("Send Generated AI Video to Ingestion"): # Changed button label
-    st.info(f"Sending {st.session_state['last_video_url']} to ingestion service...")
-    try:
-        video_response = requests.get(st.session_state["last_video_url"], timeout=60)
-        video_response.raise_for_status()
-        video_content = video_response.content
-
-        generated_video_filename = f"generated_video_{st.session_state['last_metadata'].get('seed', 'unknown_seed')}.mp4"
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix="_generated.mp4") as tmpfile:
-            tmpfile.write(video_content)
-            temp_video_path = tmpfile.name
-
-        simulator = VideoStreamSimulator(ingestion_endpoint=INGESTION_ENDPOINT)
-        try:
-            simulator.stream_video_file(
-                temp_video_path,
-                generated_video_filename,
-                st.session_state["last_metadata"].get("latitude", CENTRAL_PARK_LAT),
-                st.session_state["last_metadata"].get("longitude", CENTRAL_PARK_LON)
-            )
-        finally:
-            os.remove(temp_video_path)
-
-        st.success("Generated AI video content sent for streaming to ingestion service.")
-
-    except requests.exceptions.Timeout:
-        st.error("Timeout when trying to download or send the generated AI video.")
-    except Exception as e:
-        st.error(f"Failed to send generated AI video to ingestion: {str(e)}")
-
-
 # --- Real-Time Alerts & Map ---
 st.header("Real-Time Alerts and Map")
 try:
@@ -287,17 +207,14 @@ st.sidebar.info(
     **Video Ingestion & Analysis System**
     - **Upload & Stream**: Upload local video for frame ingestion.
     - **Search Frames**: Query processed frames for specific events.
-    - **AI Video Generation**: Create video clips using AI.
-    - **Send to Ingestion**: Process AI-generated videos.
     - **Chat (LLM)**: Ask general questions about alerts.
     - **Alerts & Map**: View latest alerts and locations.
     """
 )
 st.sidebar.markdown(f"**INGESTION_ENDPOINT**: `{INGESTION_ENDPOINT}`")
-st.sidebar.markdown(f"**VIDEO_GEN_ENDPOINT**: `{VIDEO_GEN_ENDPOINT}`")
 st.sidebar.markdown(f"**OLLAMA_ENDPOINT**: `{OLLAMA_ENDPOINT}`")
-st.sidebar.markdown(f"**STORAGE_ENDPOINT**: `{STORAGE_ENDPOINT}`") # Added to sidebar
-st.sidebar.markdown(f"**QUERY_ALERT_ENDPOINT**: `{QUERY_ALERT_ENDPOINT}/query`") # Added to sidebar, showing full path
+st.sidebar.markdown(f"**STORAGE_ENDPOINT**: `{STORAGE_ENDPOINT}`")
+st.sidebar.markdown(f"**QUERY_ALERT_ENDPOINT**: `{QUERY_ALERT_ENDPOINT}/query`")
 
 # Ensure MinIO bucket exists
 try:
