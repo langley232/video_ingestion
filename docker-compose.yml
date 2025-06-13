@@ -17,7 +17,6 @@ services:
       - app-network
     volumes:
       - minio_data:/data
-
   kafka:
     image: confluentinc/cp-kafka:latest
     ports:
@@ -28,6 +27,7 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_PROCESS_ROLES: broker # Add this line
     healthcheck:
       test: ["CMD", "nc", "-z", "kafka", "9092"]
       interval: 30s
@@ -38,7 +38,6 @@ services:
       - ./kafka/server.properties:/etc/kafka/server.properties
     networks:
       - app-network
-
   zookeeper:
     image: confluentinc/cp-zookeeper:latest
     environment:
