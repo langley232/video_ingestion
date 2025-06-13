@@ -17,42 +17,37 @@ services:
       - app-network
     volumes:
       - minio_data:/data
-  kafka:
-    image: confluentinc/cp-kafka:latest
+
+  redpanda:
+    image: redpandadata/redpanda:latest
     ports:
-      - "9092:9092"
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_PROCESS_ROLES: broker # Add this line
-      KAFKA_CLUSTER_ID: '49b697c1-9351-4ad5-a1b2-3bb441f1b292'
-    healthcheck:
-      test: ["CMD", "nc", "-z", "kafka", "9092"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+      - "9092:9092" # Kafka broker port for clients
+      - "9644:9644" # HTTP admin port
+      - "8081:8081" # RPC port
+      - "8082:8082" # Schema Registry port (if default listener is configured)
+    command:
+      - redpanda
+      - start
+      - --smp 1
+      - --overprovisioned
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092,OUTSIDE://localhost:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:9092,OUTSIDE://localhost:9092
     volumes:
-      - ./kafka/server.properties:/etc/kafka/server.properties
+      - ./redpanda/data:/var/lib/redpanda/data # Changed from /var/lib/kafka to /var/lib/redpanda/data for clarity
     networks:
       - app-network
-  zookeeper:
-    image: confluentinc/cp-zookeeper:latest
+
+  redpanda-console:
+    image: redpandadata/console:latest
+    ports:
+      - "8080:8080" # Redpanda Console port
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "2181"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      KAFKA_BROKERS: "redpanda:9092" # Note: Redpanda Console uses KAFKA_BROKERS
+      # Add any other specific environment variables for redpanda-console if needed.
     networks:
       - app-network
-    volumes:
-      - zookeeper_data:/data
+    depends_on:
+      - redpanda
 
   ollama:
     image: ollama/ollama:latest
@@ -91,7 +86,7 @@ services:
       MINIO_ACCESS_KEY: admin
       MINIO_SECRET_KEY: admin1234
       MINIO_BUCKET: videos
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -111,7 +106,7 @@ services:
       MINIO_ACCESS_KEY: admin
       MINIO_SECRET_KEY: admin1234
       MINIO_BUCKET: videos
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       FAISS_INDEX_PATH: /app/faiss/video_index.faiss
       OLLAMA_ENDPOINT: http://ollama:11434
     healthcheck:
@@ -191,7 +186,6 @@ networks:
     driver: bridge
 
 volumes:
-  zookeeper_data:
   minio_data:
   ollama_data:
   faiss_data:
