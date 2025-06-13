@@ -10,7 +10,7 @@ pid=$!
 # Wait for Ollama server to be ready
 echo "Waiting for Ollama server to start..."
 for i in {1..30}; do
-    if curl -f http://localhost:11434 > /dev/null 2>&1; then
+    if curl -f http://0.0.0.0:11434 > /dev/null 2>&1; then
         echo "Ollama server is ready!"
         break
     fi
@@ -42,7 +42,7 @@ done
 # Verify models are listed
 echo "Verifying models in /api/tags"
 for MODEL in "${MODELS[@]}"; do
-    if curl -f http://localhost:11434/api/tags | grep -q "$MODEL"; then
+    if curl -f http://0.0.0.0:11434/api/tags | grep -q "$MODEL"; then
         echo "Model $MODEL found in /api/tags"
     else
         echo "Model $MODEL not found in /api/tags"

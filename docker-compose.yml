@@ -28,6 +28,7 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_PROCESS_ROLES: broker # Add this line
+      KAFKA_CLUSTER_ID: '49b697c1-9351-4ad5-a1b2-3bb441f1b292'
     healthcheck:
       test: ["CMD", "nc", "-z", "kafka", "9092"]
       interval: 30s
