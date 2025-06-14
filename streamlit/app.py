@@ -1,4 +1,4 @@
-#file identifier : streamlit/app.py
+# file identifier : streamlit/app.py
 import streamlit as st
 import requests
 import os
@@ -9,18 +9,21 @@ import json
 import folium
 from streamlit_folium import folium_static
 import time
-import datetime # Added for VideoStreamSimulator
-import tempfile # Added for temporary file handling
+import datetime  # Added for VideoStreamSimulator
+import tempfile  # Added for temporary file handling
 
 # Configuration
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000").replace("http://", "")
+MINIO_ENDPOINT = os.getenv(
+    "MINIO_ENDPOINT", "http://minio:9000").replace("http://", "")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "admin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "admin1234")
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "videos")
 INGESTION_ENDPOINT = os.getenv("INGESTION_ENDPOINT", "http://ingestion:8000")
 STORAGE_ENDPOINT = os.getenv("STORAGE_ENDPOINT", "http://storage:8001")
 OLLAMA_ENDPOINT = os.getenv("OLLAMA_ENDPOINT", "http://ollama:11434")
-QUERY_ALERT_ENDPOINT = os.getenv("QUERY_ALERT_ENDPOINT", "http://query_alert:8000") # Added for query_alert service
+# Added for query_alert service
+QUERY_ALERT_ENDPOINT = os.getenv(
+    "QUERY_ALERT_ENDPOINT", "http://query_alert:8000")
 
 # Fixed coordinates for Central Park
 CENTRAL_PARK_LAT = 40.7829
@@ -34,6 +37,8 @@ minio_client = Minio(
 )
 
 # --- VideoStreamSimulator Class ---
+
+
 class VideoStreamSimulator:
     def __init__(self, ingestion_endpoint):
         self.ingestion_endpoint = ingestion_endpoint
@@ -68,7 +73,8 @@ class VideoStreamSimulator:
             data_payload = {'json': json.dumps(metadata)}
 
             try:
-                response = requests.post(f"{self.ingestion_endpoint}/ingest", files=files, data=data_payload)
+                response = requests.post(
+                    f"{self.ingestion_endpoint}/ingest", files=files, data=data_payload)
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
                 st.error(f"Error sending frame {frame_id}: {e}")
@@ -86,14 +92,17 @@ class VideoStreamSimulator:
         progress_bar.empty()
         st.success(f"Finished streaming {filename}")
 
+
 # --- Streamlit App Layout ---
-st.set_page_config(page_title="Video Ingestion and Analysis System", layout="wide")
+st.set_page_config(
+    page_title="Video Ingestion and Analysis System", layout="wide")
 st.title("Video Ingestion and Analysis System")
 
 
 # --- Video Upload and Stream Section ---
 st.header("Video Upload and Stream")
-uploaded_file = st.file_uploader("Choose a video file to stream", type=["mp4", "avi", "mov"])
+uploaded_file = st.file_uploader(
+    "Choose a video file to stream", type=["mp4", "avi", "mov"])
 
 if uploaded_file is not None:
     st.write(f"Uploaded file: {uploaded_file.name}")
@@ -105,13 +114,15 @@ if uploaded_file is not None:
 
         simulator = VideoStreamSimulator(ingestion_endpoint=INGESTION_ENDPOINT)
         try:
-            simulator.stream_video_file(video_path, uploaded_file.name, CENTRAL_PARK_LAT, CENTRAL_PARK_LON)
+            simulator.stream_video_file(
+                video_path, uploaded_file.name, CENTRAL_PARK_LAT, CENTRAL_PARK_LON)
         finally:
             os.remove(video_path)
 
 # --- Search Video Frames Section ---
 st.header("Search Video Frames")
-search_query = st.text_input("Enter your search query (e.g., 'unidentified object over Central Park between 1 PM and 2 PM')")
+search_query = st.text_input(
+    "Enter your search query (e.g., 'unidentified object over Central Park between 1 PM and 2 PM')")
 
 if st.button("Search Frames"):
     if search_query:
@@ -120,7 +131,8 @@ if st.button("Search Frames"):
             # The endpoint is assumed to be http://query_alert:8000/query based on task description
             # Using QUERY_ALERT_ENDPOINT which defaults to http://query_alert:8000
             # and then appending /query
-            response = requests.post(f"{QUERY_ALERT_ENDPOINT}/query", json={"query": search_query}, timeout=60)
+            response = requests.post(
+                f"{QUERY_ALERT_ENDPOINT}/query", json={"query": search_query}, timeout=60)
             response.raise_for_status()
             results = response.json()
             st.success("Search successful!")
@@ -133,7 +145,7 @@ if st.button("Search Frames"):
                 # Try to display error response from service if available
                 st.json(e.response.json())
             except:
-                pass # Ignore if error response is not JSON or doesn't exist
+                pass  # Ignore if error response is not JSON or doesn't exist
     else:
         st.warning("Please enter a search query.")
 
@@ -159,7 +171,8 @@ if prompt_chat := st.chat_input("Ask about recent alerts or sightings (uses gene
             "prompt": f"Based on general knowledge and the context of video surveillance alerts, answer the user's query: {prompt_chat}",
             "stream": False
         }
-        response = requests.post(f"{OLLAMA_ENDPOINT}/api/generate", json=payload, timeout=30)
+        response = requests.post(
+            f"{OLLAMA_ENDPOINT}/api/generate", json=payload, timeout=30)
         response.raise_for_status()
         result = response.json().get("response", "No response generated.")
     except Exception as e:
@@ -172,21 +185,29 @@ if prompt_chat := st.chat_input("Ask about recent alerts or sightings (uses gene
 # --- Real-Time Alerts & Map ---
 st.header("Real-Time Alerts and Map")
 try:
-    response = minio_client.get_object(MINIO_BUCKET, "alerts/latest_sightings.json")
+    response = minio_client.get_object(
+        MINIO_BUCKET, "alerts/latest_sightings.json")
     alert_data = json.loads(response.read().decode())
     response.close()
     response.release_conn()
 
     st.write("### Alert Summary (from latest_sightings.json)")
-    st.text_area("Summary", alert_data.get("summary", "No summary available."), height=100, disabled=True)
+    st.text_area("Summary", alert_data.get(
+        "summary", "No summary available."), height=100, disabled=True)
 
     st.write("### Sighting Locations on Map")
-    map_center_lat = alert_data.get("metadata", {}).get("sightings", [{}])[0].get("latitude", CENTRAL_PARK_LAT)
-    map_center_lon = alert_data.get("metadata", {}).get("sightings", [{}])[0].get("longitude", CENTRAL_PARK_LON)
+    # Default to Central Park coordinates if no sightings
+    map_center_lat = CENTRAL_PARK_LAT
+    map_center_lon = CENTRAL_PARK_LON
+
+    # Only update center if we have sightings
+    sightings = alert_data.get("metadata", {}).get("sightings", [])
+    if sightings:
+        map_center_lat = sightings[0].get("latitude", CENTRAL_PARK_LAT)
+        map_center_lon = sightings[0].get("longitude", CENTRAL_PARK_LON)
 
     m = folium.Map(location=[map_center_lat, map_center_lon], zoom_start=12)
 
-    sightings = alert_data.get("metadata", {}).get("sightings", [])
     if not sightings:
         st.info("No current sightings to display on the map.")
     else:
@@ -215,7 +236,8 @@ st.sidebar.info(
 st.sidebar.markdown(f"**INGESTION_ENDPOINT**: `{INGESTION_ENDPOINT}`")
 st.sidebar.markdown(f"**OLLAMA_ENDPOINT**: `{OLLAMA_ENDPOINT}`")
 st.sidebar.markdown(f"**STORAGE_ENDPOINT**: `{STORAGE_ENDPOINT}`")
-st.sidebar.markdown(f"**QUERY_ALERT_ENDPOINT**: `{QUERY_ALERT_ENDPOINT}/query`")
+st.sidebar.markdown(
+    f"**QUERY_ALERT_ENDPOINT**: `{QUERY_ALERT_ENDPOINT}/query`")
 
 # Ensure MinIO bucket exists
 try:
