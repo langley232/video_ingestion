@@ -56,9 +56,10 @@ services:
     ports:
       - "11434:11434"
     environment:
-      #OLLAMA_MODELS: "paligemma-2-mix:latest,nomic-embed-text:latest"
       OLLAMA_MODELS: "orca-mini:3b"
       OLLAMA_HOST: "0.0.0.0:11434"
+      OLLAMA_ORIGINS: "*"
+      OLLAMA_DEBUG: "INFO"
     deploy:
       resources:
         reservations:
@@ -71,7 +72,7 @@ services:
       - ollama_data:/root/.ollama
     entrypoint: ["/entrypoint.sh"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434"]
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -178,11 +179,11 @@ services:
     networks:
       - app-network # Ensure it's on the same network as other services
     healthcheck: # Optional: Add a healthcheck
-       test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
-       interval: 30s
-       timeout: 10s
-       retries: 3
-       start_period: 30s
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 networks:
   app-network:
@@ -192,4 +193,3 @@ volumes:
   minio_data:
   ollama_data:
   faiss_data:
-

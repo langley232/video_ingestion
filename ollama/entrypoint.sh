@@ -19,31 +19,43 @@ for i in {1..30}; do
     sleep 5
 done
 
-# === NEW DEBUGGING STEPS ===
+# Test internet connectivity
 echo "Testing internet connectivity..."
 if curl -fsS --connect-timeout 5 https://google.com > /dev/null; then
     echo "✅ Internet connectivity test passed."
 else
     echo "❌ Internet connectivity test failed. This is likely the problem."
+    exit 1
 fi
-# === END DEBUGGING STEPS ===
 
 # Pull models specified in OLLAMA_MODELS environment variable
 echo "Checking for models: $OLLAMA_MODELS"
 IFS=',' read -ra MODELS <<< "$OLLAMA_MODELS"
 for MODEL in "${MODELS[@]}"; do
+    echo "Processing model: $MODEL"
+    # Remove any whitespace from model name
+    MODEL=$(echo $MODEL | xargs)
+    
+    # Check if model exists
     if ollama list | grep -q "$MODEL"; then
         echo "Model $MODEL already available."
     else
         echo "Pulling model: $MODEL"
-        # We are now showing the output of the pull command
-        ollama pull "$MODEL"
-        if [ $? -eq 0 ]; then
-            echo "✅ Model $MODEL pulled successfully!"
-        else
-            echo "❌ Failed to pull model $MODEL"
-            exit 1
-        fi
+        # Try pulling the model with retries
+        for attempt in {1..3}; do
+            echo "Attempt $attempt to pull $MODEL"
+            if ollama pull "$MODEL"; then
+                echo "✅ Model $MODEL pulled successfully!"
+                break
+            else
+                if [ $attempt -eq 3 ]; then
+                    echo "❌ Failed to pull model $MODEL after 3 attempts"
+                    exit 1
+                fi
+                echo "Retrying in 10 seconds..."
+                sleep 10
+            fi
+        done
     fi
 done
 
