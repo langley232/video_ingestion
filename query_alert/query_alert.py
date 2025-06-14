@@ -34,7 +34,7 @@ except S3Error as e:
     raise
 
 ollama_endpoint = os.getenv("OLLAMA_ENDPOINT", "http://ollama:11434")
-vision_model_name = "paligemma-2-mix:latest" # Changed from llava_model
+vision_model_name = "moondream:1.8b" # Changed from llava_model
 summary_model = "nomic-embed-text:latest"
 
 storage_endpoint = os.getenv("STORAGE_ENDPOINT", "http://storage:8001")

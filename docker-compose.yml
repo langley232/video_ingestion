@@ -50,16 +50,17 @@ services:
       - app-network
     depends_on:
       - redpanda
-
   ollama:
     image: ollama/ollama:latest
+    container_name: ollama
     ports:
       - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./ollama/entrypoint.sh:/entrypoint.sh
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
     environment:
-      OLLAMA_MODELS: "orca-mini:3b"
-      OLLAMA_HOST: "0.0.0.0:11434"
-      OLLAMA_ORIGINS: "*"
-      OLLAMA_DEBUG: "INFO"
+      - OLLAMA_MODELS=nomic-embed-text:latest,moondream:1.8b,granite3.2-vision:2b,orca-mini:3b,gemma3:4b
     deploy:
       resources:
         reservations:
@@ -67,19 +68,17 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    volumes:
-      - ./ollama/entrypoint.sh:/entrypoint.sh
-      - ollama_data:/root/.ollama
-    entrypoint: ["/entrypoint.sh"]
+    pull_policy: always
+    tty: true
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "curl", "--fail", "http://localhost:11434/api/version"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 120s
+      retries: 3
+      start_period: 60s
     networks:
       - app-network
-
   ingestion:
     build:
       context: ./ingestion
