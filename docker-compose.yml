@@ -8,11 +8,6 @@ services:
       MINIO_ROOT_USER: admin
       MINIO_ROOT_PASSWORD: admin1234
     command: server /data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
     networks:
       - app-network
     volumes:
@@ -48,8 +43,7 @@ services:
       # Add any other specific environment variables for redpanda-console if needed.
     networks:
       - app-network
-    depends_on:
-      - redpanda
+
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
@@ -71,14 +65,9 @@ services:
     pull_policy: always
     tty: true
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:11434/api/version"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
     networks:
       - app-network
+
   ingestion:
     build:
       context: ./ingestion
@@ -90,12 +79,6 @@ services:
       MINIO_SECRET_KEY: admin1234
       MINIO_BUCKET: videos
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
     networks:
       - app-network
 
@@ -112,12 +95,6 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       FAISS_INDEX_PATH: /app/faiss/video_index.faiss
       OLLAMA_ENDPOINT: http://ollama:11434
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
     volumes:
       - faiss_data:/app/faiss
     deploy:
@@ -156,12 +133,6 @@ services:
       INGESTION_ENDPOINT: http://ingestion:8000
       STORAGE_ENDPOINT: http://storage:8001
       OLLAMA_ENDPOINT: http://ollama:11434
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
     networks:
       - app-network
     volumes:
@@ -176,13 +147,7 @@ services:
     ports:
       - "8003:8000" # Expose on host port 8003, container port 8000
     networks:
-      - app-network # Ensure it's on the same network as other services
-    healthcheck: # Optional: Add a healthcheck
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+      - app-network
 
 networks:
   app-network:
