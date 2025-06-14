@@ -30,8 +30,10 @@ services:
       - start
       - --smp 1
       - --overprovisioned
-      - --kafka-addr PLAINTEXT://0.0.0.0:9092,OUTSIDE://localhost:9092
-      - --advertise-kafka-addr PLAINTEXT://redpanda:9092,OUTSIDE://localhost:9092
+      # 1. Define ONE internal listener for all traffic.
+      - --kafka-addr internal://0.0.0.0:9092
+      # 2. Advertise TWO ways to connect to it.
+      - --advertise-kafka-addr internal://redpanda:9092,outside://localhost:9092
     volumes:
       - ./redpanda/data:/var/lib/redpanda/data # Changed from /var/lib/kafka to /var/lib/redpanda/data for clarity
     networks:
@@ -54,7 +56,8 @@ services:
     ports:
       - "11434:11434"
     environment:
-      OLLAMA_MODELS: "paligemma-2-mix:latest,nomic-embed-text:latest"
+      #OLLAMA_MODELS: "paligemma-2-mix:latest,nomic-embed-text:latest"
+      OLLAMA_MODELS: "orca-mini:3b"
       OLLAMA_HOST: "0.0.0.0:11434"
     deploy:
       resources:
