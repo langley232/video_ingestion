@@ -155,8 +155,10 @@ if prompt_chat := st.chat_input("Ask about recent alerts or sightings (uses gene
     try:
         # This chat uses OLLAMA_ENDPOINT for general queries, not query_alert
         payload = {
-            "model": "phi3:mini",
-            "prompt": f"Based on general knowledge and the context of video surveillance alerts, answer the user's query: {prompt_chat}",
+            "model": "moondream:1.8b",
+            "prompt": f"""You are an AI assistant specialized in analyzing video surveillance footage and detecting suspicious objects, particularly drones and aerial vehicles. 
+            Based on your vision capabilities and knowledge of video surveillance, answer the user's query about alerts and sightings: {prompt_chat}
+            If the query involves analyzing specific frames or objects, describe what you would look for in the video.""",
             "stream": False
         }
         response = requests.post(
