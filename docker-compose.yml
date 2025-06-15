@@ -121,7 +121,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -182,7 +182,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 30s # <-- This gives the service a 30-second grace period  
     networks:
       - app-network
 

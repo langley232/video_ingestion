@@ -28,4 +28,4 @@ RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
 
 # Set entrypoint
-CMD ["uvicorn", "query_alert:app", "--host", "0.0.0.0", "--port", "8003"]
+CMD ["uvicorn", "query_alert:app", "--host", "0.0.0.0", "--port", "8000"]
