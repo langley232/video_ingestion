@@ -44,53 +44,41 @@ class VideoStreamSimulator:
         self.ingestion_endpoint = ingestion_endpoint
 
     def stream_video_file(self, video_path, filename, latitude, longitude):
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            st.error(f"Error opening video file: {video_path}")
-            return
+        try:
+            st.info(f"Starting upload for {filename}...")
 
-        st.info(f"Starting stream for {filename}...")
-        frame_id = 0
-        progress_bar = st.progress(0)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            timestamp = datetime.datetime.now().isoformat()
-            metadata = {
-                "frame_id": frame_id,
-                "timestamp": timestamp,
-                "latitude": latitude,
-                "longitude": longitude,
-                "filename": filename
+            # Prepare the form data
+            files = {'file': (filename, open(video_path, 'rb'), 'video/mp4')}
+            data = {
+                'timestamp': datetime.datetime.now().isoformat(),
+                'latitude': str(latitude),
+                'longitude': str(longitude),
+                'location_name': 'Central Park',
+                'description': f'Uploaded video: {filename}'
             }
 
-            _, buffer = cv2.imencode('.jpg', frame)
-            files = {'frame': ('frame.jpg', buffer.tobytes(), 'image/jpeg')}
-            data_payload = {'json': json.dumps(metadata)}
+            # Send the complete video file
+            response = requests.post(
+                f"{self.ingestion_endpoint}/ingest",
+                files=files,
+                data=data
+            )
+            response.raise_for_status()
 
-            try:
-                response = requests.post(
-                    f"{self.ingestion_endpoint}/ingest", files=files, data=data_payload)
-                response.raise_for_status()
-            except requests.exceptions.RequestException as e:
-                st.error(f"Error sending frame {frame_id}: {e}")
-                break
+            result = response.json()
+            st.success(f"Successfully uploaded {filename}")
+            st.json(result)
 
-            frame_id += 1
-            if total_frames > 0:
-                progress_bar.progress(frame_id / total_frames)
-            else:
-                progress_bar.progress(frame_id % 100)
-
-            time.sleep(1/30)
-
-        cap.release()
-        progress_bar.empty()
-        st.success(f"Finished streaming {filename}")
+        except Exception as e:
+            st.error(f"Error uploading video: {str(e)}")
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    st.json(e.response.json())
+                except:
+                    st.text(f"Error response: {e.response.text}")
+        finally:
+            if 'files' in locals() and 'file' in files:
+                files['file'][1].close()
 
 
 # --- Streamlit App Layout ---

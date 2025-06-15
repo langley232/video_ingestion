@@ -149,6 +149,7 @@ def store_alert(video_path: str, objects: list, similar_videos: list, metadata: 
                     alert_text += f"Details: {sighting['details']}. "
 
         # Attempt text-to-speech synthesis
+        audio_path = None
         try:
             logger.info(f"Generating speech alert: {alert_text[:100]}...")
             tts_payload = {
@@ -185,7 +186,7 @@ def store_alert(video_path: str, objects: list, similar_videos: list, metadata: 
             "metadata": metadata,
             "summary": summary,
             "alert_text": alert_text,
-            "audio_path": audio_path if 'audio_path' in locals() else None,
+            "audio_path": audio_path,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
 
@@ -196,8 +197,44 @@ def store_alert(video_path: str, objects: list, similar_videos: list, metadata: 
         minio_client.fput_object(bucket_name, alert_path, "/tmp/alert.json")
 
         # Update latest sightings
-        minio_client.fput_object(
-            bucket_name, "alerts/latest_sightings.json", "/tmp/alert.json")
+        try:
+            # First try to get existing sightings
+            try:
+                response = minio_client.get_object(
+                    bucket_name, "alerts/latest_sightings.json")
+                existing_data = json.loads(response.read().decode())
+                response.close()
+                response.release_conn()
+
+                # Merge new sightings with existing ones
+                if "sightings" in existing_data:
+                    existing_data["sightings"].extend(
+                        metadata.get("sightings", []))
+                else:
+                    existing_data["sightings"] = metadata.get("sightings", [])
+
+                # Update summary
+                existing_data["summary"] = summary
+                existing_data["last_updated"] = time.strftime(
+                    "%Y-%m-%d %H:%M:%S")
+
+                # Write back to MinIO
+                with open("/tmp/latest_sightings.json", "w") as f:
+                    json.dump(existing_data, f)
+                minio_client.fput_object(
+                    bucket_name, "alerts/latest_sightings.json", "/tmp/latest_sightings.json")
+            except S3Error:
+                # If file doesn't exist, create new one
+                with open("/tmp/latest_sightings.json", "w") as f:
+                    json.dump({
+                        "sightings": metadata.get("sightings", []),
+                        "summary": summary,
+                        "last_updated": time.strftime("%Y-%m-%d %H:%M:%S")
+                    }, f)
+                minio_client.fput_object(
+                    bucket_name, "alerts/latest_sightings.json", "/tmp/latest_sightings.json")
+        except Exception as e:
+            logger.error(f"Error updating latest sightings: {str(e)}")
 
         logger.info(f"Stored alert: {alert_path}")
         return alert_data
@@ -298,9 +335,12 @@ def process_video(video_path: str, timestamp: str):
                     "location": location,
                     "video_metadata": video_metadata
                 }, summary)
+                logger.info(f"Generated alert for {video_path}")
+                return alert_data
 
     except Exception as e:
         logger.error(f"Error processing video {video_path}: {str(e)}")
+        return None
 
 
 def kafka_consumer_loop():
