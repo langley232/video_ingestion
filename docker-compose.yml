@@ -74,12 +74,6 @@ services:
     entrypoint: ["/bin/bash", "/entrypoint.sh"]
     environment:
       - OLLAMA_MODELS=nomic-embed-text:latest,moondream:1.8b,granite3.2-vision:2b,orca-mini:3b,gemma3:4b
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
     deploy:
       resources:
         reservations:
@@ -164,8 +158,6 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
       ingestion:
         condition: service_healthy
     healthcheck:
@@ -194,8 +186,6 @@ services:
         condition: service_healthy
       query_alert:
         condition: service_healthy
-      audio_backend:
-        condition: service_healthy
     networks:
       - app-network
 
@@ -208,12 +198,6 @@ services:
       - "8002:8000"
     environment:
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
     networks:
       - app-network
 
