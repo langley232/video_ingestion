@@ -1,3 +1,5 @@
+version: "3.8"
+
 services:
   minio:
     image: minio/minio:latest
@@ -47,7 +49,7 @@ services:
       retries: 5
       start_period: 30s
     volumes:
-      - ./redpanda/data:/var/lib/redpanda/data # Changed from /var/lib/kafka to /var/lib/redpanda/data for clarity
+      - ./redpanda/data:/var/lib/redpanda/data
     networks:
       - app-network
 
@@ -120,16 +122,17 @@ services:
   storage:
     build:
       context: ./storage
+      dockerfile: Dockerfile
+    container_name: storage
     ports:
       - "8001:8001"
     environment:
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: admin
-      MINIO_SECRET_KEY: admin1234
-      MINIO_BUCKET: videos
-      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
-      FAISS_INDEX_PATH: /app/faiss/video_index.faiss
-      OLLAMA_ENDPOINT: http://ollama:11434
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+      - FAISS_INDEX_PATH=/app/faiss/video_index.faiss
+      - OLLAMA_ENDPOINT=http://ollama:11434
     volumes:
       - faiss_data:/app/faiss
     deploy:
@@ -195,12 +198,10 @@ services:
         condition: service_healthy
     networks:
       - app-network
-    volumes:
-      - faiss_data:/app/faiss
 
   audio_backend:
     build:
-      context: ./audio_api
+      context: ./audio_api/backend
       dockerfile: Dockerfile
     container_name: audio_backend
     ports:
@@ -213,6 +214,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    networks:
+      - app-network
 
 networks:
   app-network:
