@@ -200,29 +200,44 @@ try:
     map_center_lat = CENTRAL_PARK_LAT
     map_center_lon = CENTRAL_PARK_LON
 
-    # Only update center if we have sightings
-    sightings = alert_data.get("metadata", {}).get("sightings", [])
-    if sightings:
-        map_center_lat = sightings[0].get("latitude", CENTRAL_PARK_LAT)
-        map_center_lon = sightings[0].get("longitude", CENTRAL_PARK_LON)
+    # Create map centered on Central Park
+    m = folium.Map(location=[map_center_lat, map_center_lon], zoom_start=13)
 
-    m = folium.Map(location=[map_center_lat, map_center_lon], zoom_start=12)
+    # Add sightings to map if available
+    if "sightings" in alert_data:
+        for sighting in alert_data["sightings"]:
+            location = sighting.get("location", {})
+            lat = location.get("latitude", map_center_lat)
+            lon = location.get("longitude", map_center_lon)
+            name = location.get("name", "Unknown Location")
 
-    if not sightings:
-        st.info("No current sightings to display on the map.")
-    else:
-        for sighting in sightings:
+            # Create popup content
+            popup_content = f"""
+            <b>Object:</b> {sighting.get('object', 'Unknown')}<br>
+            <b>Confidence:</b> {sighting.get('confidence', 0):.2%}<br>
+            <b>Time:</b> {sighting.get('timestamp', 'Unknown')}<br>
+            <b>Details:</b> {sighting.get('details', 'No details available')}
+            """
+
             folium.Marker(
-                location=[sighting["latitude"], sighting["longitude"]],
-                popup=f"Object: {sighting['object']}<br>Time: {sighting['timestamp']}<br>Confidence: {sighting.get('confidence', 'N/A')}",
-                tooltip=sighting['object'],
-                icon=folium.Icon(color="red", icon="info-sign")
+                [lat, lon],
+                popup=folium.Popup(popup_content, max_width=300),
+                tooltip=name
             ).add_to(m)
-        folium_static(m, width=None, height=500)
+
+    folium_static(m)
 
 except Exception as e:
-    st.warning(f"Could not load alerts or display map: {str(e)}")
-    st.info("If this is the first run, alert data might not be generated yet.")
+    st.info("No alerts available yet. Alerts will appear here once video analysis detects relevant events.")
+    # Create a default map centered on Central Park
+    m = folium.Map(location=[CENTRAL_PARK_LAT,
+                   CENTRAL_PARK_LON], zoom_start=13)
+    folium.Marker(
+        [CENTRAL_PARK_LAT, CENTRAL_PARK_LON],
+        popup="Central Park - Default Location",
+        tooltip="Central Park"
+    ).add_to(m)
+    folium_static(m)
 
 st.sidebar.info(
     """
