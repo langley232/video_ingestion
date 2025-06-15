@@ -39,8 +39,8 @@ services:
       - PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
       - --advertise-kafka-addr
       - PLAINTEXT://redpanda:29092,OUTSIDE://redpanda:9092
-      - --crash-reports-dir
-      - "/tmp/crash_reports"
+      - --check
+      - "false"
     ports:
       - "9092:9092"
       - "29092:29092"
@@ -52,10 +52,6 @@ services:
       start_period: 30s
     volumes:
       - ./redpanda/data:/var/lib/redpanda/data
-      - /tmp/crash_reports:/tmp/crash_reports
-    user: "1000:1000"
-    environment:
-      - REDPANDA_RPC_SERVER_LISTEN_ADDRESS=0.0.0.0
     networks:
       - app-network
 
