@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     libgl1 \
     libglib2.0-0 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up Python environment
@@ -28,4 +29,4 @@ RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
 
 # Set entrypoint
-CMD ["uvicorn", "query_alert:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "query_alert:app", "--host", "0.0.0.0", "--port", "8003"]
