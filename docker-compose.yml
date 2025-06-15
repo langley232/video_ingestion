@@ -74,6 +74,8 @@ services:
     entrypoint: ["/bin/bash", "/entrypoint.sh"]
     environment:
       - OLLAMA_MODELS=nomic-embed-text:latest,moondream:1.8b,granite3.2-vision:2b,orca-mini:3b,gemma3:4b
+    healthcheck:
+      disable: true
     deploy:
       resources:
         reservations:
@@ -81,6 +83,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    runtime: nvidia
     pull_policy: always
     tty: true
     restart: unless-stopped
@@ -136,6 +139,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    runtime: nvidia
     networks:
       - app-network
 
