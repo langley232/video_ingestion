@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Install system dependencies
+# Install system dependencies for OpenCV and other libraries
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
@@ -11,6 +11,19 @@ RUN apt-get update && apt-get install -y \
     libglu1-mesa-dev \
     freeglut3-dev \
     mesa-common-dev \
+    libgtk-3-0 \
+    libavcodec-dev \
+    libavformat-dev \
+    libswscale-dev \
+    libv4l-dev \
+    libxvidcore-dev \
+    libx264-dev \
+    libjpeg-dev \
+    libpng-dev \
+    libtiff-dev \
+    libatlas-base-dev \
+    python3-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
