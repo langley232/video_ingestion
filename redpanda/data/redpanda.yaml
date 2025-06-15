@@ -1,0 +1,17 @@
+redpanda:
+  data_directory: /var/lib/redpanda/data
+  node_id: 0
+  rpc_server:
+    address: 0.0.0.0
+    port: 33145
+  kafka_api:
+    - address: 0.0.0.0
+      port: 9092
+      name: OUTSIDE
+    - address: 0.0.0.0
+      port: 29092
+      name: PLAINTEXT
+  admin:
+    address: 0.0.0.0
+    port: 9644
+  developer_mode: true 
