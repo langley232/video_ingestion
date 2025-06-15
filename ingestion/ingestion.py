@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+
 # Initialize MinIO client
 minio_client = Minio(
     endpoint=os.getenv("MINIO_ENDPOINT", "minio:9000").replace("http://", ""),
