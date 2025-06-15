@@ -5,6 +5,7 @@ import os
 import tempfile
 from minio import Minio
 import logging
+from datetime import datetime
 
 # Configuration
 INGESTION_ENDPOINT = os.getenv("INGESTION_ENDPOINT", "http://ingestion:8000")
@@ -118,14 +119,17 @@ if uploaded_file is not None:
             # Stream the video
             with open(tmp_path, 'rb') as video_file:
                 files = {'file': (uploaded_file.name, video_file, 'video/mp4')}
+                data = {
+                    'timestamp': datetime.now().isoformat(),
+                    'latitude': 40.7829,
+                    'longitude': -73.9654,
+                    'location_name': 'Central Park',
+                    'description': f'Uploaded video: {uploaded_file.name}'
+                }
                 response = requests.post(
                     f"{INGESTION_ENDPOINT}/ingest",
                     files=files,
-                    params={
-                        "location": "Central Park",
-                        "latitude": 40.7829,
-                        "longitude": -73.9654
-                    }
+                    data=data
                 )
                 response.raise_for_status()
                 st.success("Video stream started successfully!")
