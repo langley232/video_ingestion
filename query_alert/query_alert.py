@@ -54,7 +54,7 @@ except S3Error as e:
     raise
 
 ollama_endpoint = os.getenv("OLLAMA_ENDPOINT", "http://ollama:11434")
-vision_model_name = "moondream:1.8b"  # Changed from llava_model
+vision_model_name = "gemma3:4b"  # Changed from moondream:1.8b
 summary_model = "nomic-embed-text:latest"
 
 storage_endpoint = os.getenv("STORAGE_ENDPOINT", "http://storage:8001")
@@ -73,7 +73,7 @@ DETECTION_CONFIG = {
         "flying object"
     ],
     "confidence_threshold": 0.6,  # Lowered threshold for better detection
-    "model": "moondream:1.8b"
+    "model": "gemma3:4b"
 }
 
 
@@ -95,7 +95,29 @@ def analyze_frame(frame_data: bytes) -> dict:
         img_base64 = base64.b64encode(frame_data).decode("utf-8")
         payload = {
             "model": DETECTION_CONFIG["model"],
-            "prompt": "Analyze this image for any aerial vehicles, drones, or suspicious flying objects. Focus on military or surveillance drones. Return a JSON with detected objects, their type, and confidence scores. Include any relevant details about the object's appearance or behavior.",
+            "prompt": """You are an AI assistant analyzing video frames for suspicious objects. 
+            Given the base64 encoded image, analyze it for any aerial vehicles, drones, or suspicious flying objects.
+            
+            Focus on detecting:
+            1. Small flying objects in the sky
+            2. Quadcopter or fixed-wing drone shapes
+            3. Objects with propellers or rotors
+            4. Objects that appear to be hovering or moving in the air
+            5. Any unusual objects that could be drones or UAVs
+            
+            Return a JSON response in this exact format:
+            {
+                "objects": [
+                    {
+                        "name": "object name",
+                        "confidence": confidence_score (between 0 and 1),
+                        "details": "detailed description of the object and its behavior"
+                    }
+                ]
+            }
+            
+            If no suspicious objects are found, return an empty objects array.
+            Be precise and detailed in your analysis.""",
             "images": [img_base64],
             "format": "json"
         }
@@ -103,7 +125,10 @@ def analyze_frame(frame_data: bytes) -> dict:
             f"{ollama_endpoint}/api/generate", json=payload, timeout=30)
         response.raise_for_status()
         result = json.loads(response.text.split('\n')[-2])['response']
-        return json.loads(result)
+        analysis_result = json.loads(result)
+        logger.info(
+            f"Frame analysis result: {json.dumps(analysis_result, indent=2)}")
+        return analysis_result
     except Exception as e:
         logger.error(f"Error analyzing frame: {str(e)}")
         return {"objects": [], "error": str(e)}
@@ -256,6 +281,8 @@ def process_video(video_path: str, timestamp: str):
             video_metadata = json.loads(metadata_response.read().decode())
             metadata_response.close()
             metadata_response.release_conn()
+            logger.info(
+                f"Retrieved metadata for {video_path}: {video_metadata}")
         except S3Error:
             logger.warning(f"No metadata found for {video_path}")
             video_metadata = {}
@@ -265,14 +292,18 @@ def process_video(video_path: str, timestamp: str):
         video_data = response.read()
         response.close()
         response.release_conn()
+        logger.info(f"Retrieved video data for {video_path}")
 
         frame_data = extract_frame(video_data)
         if not frame_data:
             logger.warning(f"Failed to extract frame from {video_path}")
             return
+        logger.info(f"Successfully extracted frame from {video_path}")
 
         analysis = analyze_frame(frame_data)
         objects_detected = analysis.get("objects", [])
+        logger.info(
+            f"Frame analysis results: {json.dumps(objects_detected, indent=2)}")
 
         # Check for suspicious objects
         suspicious = [
@@ -280,6 +311,8 @@ def process_video(video_path: str, timestamp: str):
             if any(target.lower() in obj["name"].lower() for target in DETECTION_CONFIG["target_objects"])
             and obj["confidence"] > DETECTION_CONFIG["confidence_threshold"]
         ]
+        logger.info(
+            f"Detected suspicious objects: {json.dumps(suspicious, indent=2)}")
 
         if suspicious:
             # Use location from metadata if available
@@ -288,6 +321,7 @@ def process_video(video_path: str, timestamp: str):
                 "longitude": -73.9654,
                 "name": "Central Park"
             })
+            logger.info(f"Using location: {location}")
 
             # Create detailed description
             detection_details = []
@@ -298,7 +332,7 @@ def process_video(video_path: str, timestamp: str):
                 detection_details.append(details)
 
             detection_text = " | ".join(detection_details)
-            logger.info(f"Detected objects: {detection_text}")
+            logger.info(f"Detection details: {detection_text}")
 
             # Get embeddings for similarity search
             embedding_response = requests.post(
@@ -311,8 +345,11 @@ def process_video(video_path: str, timestamp: str):
             )
             embedding_response.raise_for_status()
             embedding = embedding_response.json().get("embedding", [])
+            logger.info("Generated embeddings for similarity search")
 
             similar_videos = query_similar_videos(embedding)
+            logger.info(
+                f"Found similar videos: {json.dumps(similar_videos, indent=2)}")
 
             # Create sightings with enhanced metadata
             sightings = []
@@ -330,13 +367,17 @@ def process_video(video_path: str, timestamp: str):
 
             if sightings:
                 summary = summarize_sightings(sightings)
+                logger.info(f"Generated summary: {summary}")
                 alert_data = store_alert(video_path, suspicious, similar_videos, {
                     "sightings": sightings,
                     "location": location,
                     "video_metadata": video_metadata
                 }, summary)
-                logger.info(f"Generated alert for {video_path}")
+                logger.info(
+                    f"Generated alert for {video_path}: {json.dumps(alert_data, indent=2)}")
                 return alert_data
+            else:
+                logger.info("No sightings to generate alert for")
 
     except Exception as e:
         logger.error(f"Error processing video {video_path}: {str(e)}")

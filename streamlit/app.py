@@ -11,6 +11,7 @@ from streamlit_folium import folium_static
 import time
 import datetime  # Added for VideoStreamSimulator
 import tempfile  # Added for temporary file handling
+import logging
 
 # Configuration
 MINIO_ENDPOINT = os.getenv(
@@ -153,18 +154,7 @@ if prompt_chat := st.chat_input("Ask about recent alerts or sightings (uses gene
         st.markdown(prompt_chat)
 
     try:
-        # This chat uses OLLAMA_ENDPOINT for general queries, not query_alert
-        payload = {
-            "model": "moondream:1.8b",
-            "prompt": f"""You are an AI assistant specialized in analyzing video surveillance footage and detecting suspicious objects, particularly drones and aerial vehicles. 
-            Based on your vision capabilities and knowledge of video surveillance, answer the user's query about alerts and sightings: {prompt_chat}
-            If the query involves analyzing specific frames or objects, describe what you would look for in the video.""",
-            "stream": False
-        }
-        response = requests.post(
-            f"{OLLAMA_ENDPOINT}/api/generate", json=payload, timeout=30)
-        response.raise_for_status()
-        result = response.json().get("response", "No response generated.")
+        result = query_llm(prompt_chat)
     except Exception as e:
         result = f"Error processing chat: {str(e)}"
 
@@ -251,3 +241,58 @@ try:
         st.sidebar.success(f"MinIO bucket '{MINIO_BUCKET}' created/ensured.")
 except Exception as e:
     st.sidebar.error(f"Error with MinIO bucket: {e}")
+
+
+def get_latest_alerts():
+    try:
+        response = minio_client.get_object(
+            MINIO_BUCKET, "alerts/latest_sightings.json")
+        alert_data = json.loads(response.read().decode())
+        response.close()
+        response.release_conn()
+        return alert_data
+    except Exception as e:
+        logger.error(f"Error getting latest alerts: {str(e)}")
+        return None
+
+
+def query_llm(prompt_chat: str) -> str:
+    try:
+        # First, get the latest alerts data
+        alerts_data = get_latest_alerts()
+
+        # Prepare context from alerts
+        alerts_context = ""
+        if alerts_data and "sightings" in alerts_data:
+            alerts_context = "Recent alerts:\n"
+            for sighting in alerts_data["sightings"]:
+                alerts_context += f"- {sighting['object']} detected at {sighting['timestamp']} with {sighting['confidence']:.0%} confidence"
+                if sighting.get('details'):
+                    alerts_context += f". Details: {sighting['details']}"
+                alerts_context += "\n"
+
+        # This chat uses OLLAMA_ENDPOINT for general queries, not query_alert
+        payload = {
+            "model": "gemma3:4b",
+            "prompt": f"""You are an AI assistant specialized in analyzing video surveillance footage and detecting suspicious objects, particularly drones and aerial vehicles. 
+            
+            Here is the current alerts data:
+            {alerts_context}
+            
+            Based on this alerts data and your knowledge of video surveillance, answer the user's query: {prompt_chat}
+            
+            If the query is about recent sightings, use the alerts data above to provide specific details about when and what was detected.
+            If no relevant alerts are found, clearly state that no matching alerts were found in the recent data.
+            If the query involves analyzing specific frames or objects, describe what you would look for in the video.
+            
+            Provide clear, concise, and accurate responses based on the available data.""",
+            "stream": False
+        }
+        response = requests.post(
+            f"{OLLAMA_ENDPOINT}/api/generate", json=payload, timeout=30)
+        response.raise_for_status()
+        result = response.json().get("response", "No response generated.")
+        return result
+    except Exception as e:
+        logger.error(f"Error querying LLM: {str(e)}")
+        return f"Error querying LLM: {str(e)}"
