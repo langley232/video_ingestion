@@ -21,50 +21,30 @@ services:
       - app-network
     volumes:
       - minio_data:/data
+
   redpanda:
     image: redpandadata/redpanda:latest
     container_name: redpanda
     command:
       - redpanda
-      - start
-      - --kafka-addr
-      - internal://0.0.0.0:9092,external://0.0.0.0:29092
-      - --advertise-kafka-addr
-      - internal://redpanda:9092,external://localhost:29092
-      - --pandaproxy-addr
-      - internal://0.0.0.0:8082,external://0.0.0.0:18082
-      - --advertise-pandaproxy-addr
-      - internal://redpanda:8082,external://localhost:18082
-      - --schema-registry-addr
-      - internal://0.0.0.0:8081,external://0.0.0.0:18081
-      - --rpc-addr
-      - redpanda:33145
-      - --advertise-rpc-addr
-      - redpanda:33145
-      - --smp
-      - '1'
-      - --memory
-      - 1G
-      - --mode
-      - dev-container
-      - --default-log-level=info
+      - --config
+      - /etc/redpanda/redpanda.yaml
     ports:
+      - "9092:9092"
       - "29092:29092"
       - "9644:9644"
-      - "18082:18082"
-      - "18081:18081"
     healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy|true'"]
-      interval: 15s
-      timeout: 10s
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 45s
+      start_period: 30s
     volumes:
-      - redpanda-data:/var/lib/redpanda/data
+      - ./redpanda/data:/var/lib/redpanda/data
+      - ./redpanda/data/redpanda.yaml:/etc/redpanda/redpanda.yaml
     networks:
       - app-network
 
-# Also add this volumes section at the root level of your docker-compose.yml
   redpanda-console:
     image: redpandadata/console:latest
     container_name: redpanda-console
@@ -228,4 +208,3 @@ volumes:
   minio_data:
   ollama_data:
   faiss_data:
-  redpanda-data:
