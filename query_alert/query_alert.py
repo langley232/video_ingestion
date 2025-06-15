@@ -54,7 +54,7 @@ except S3Error as e:
     raise
 
 ollama_endpoint = os.getenv("OLLAMA_ENDPOINT", "http://ollama:11434")
-vision_model_name = "gemma3:4b"  # Changed from moondream:1.8b
+vision_model_name = "moondream:1.8b"  # Changed back to moondream:1.8b
 summary_model = "nomic-embed-text:latest"
 
 storage_endpoint = os.getenv("STORAGE_ENDPOINT", "http://storage:8001")
@@ -73,7 +73,7 @@ DETECTION_CONFIG = {
         "flying object"
     ],
     "confidence_threshold": 0.6,  # Lowered threshold for better detection
-    "model": "gemma3:4b"
+    "model": "moondream:1.8b"
 }
 
 
