@@ -184,24 +184,74 @@ def store_alert(video_path: str, objects: list, similar_videos: list, metadata: 
                 "stability": 0.5,
                 "similarity_boost": 0.75
             }
-            response = requests.post(
-                f"{AUDIO_BACKEND_ENDPOINT}/synthesize/", json=tts_payload, timeout=20)
 
-            if response.status_code == 200:
-                # Store the audio alert
-                audio_path = f"alerts/audio/alert_{int(time.time())}.mp3"
-                minio_client.put_object(
-                    bucket_name, audio_path,
-                    io.BytesIO(response.content),
-                    len(response.content),
-                    content_type="audio/mpeg"
-                )
-                logger.info(f"Stored audio alert: {audio_path}")
-            else:
-                logger.error(
-                    f"Speech synthesis failed with status {response.status_code}")
+            # Add retry logic for TTS
+            max_retries = 3
+            retry_delay = 2  # seconds
+
+            for attempt in range(max_retries):
+                try:
+                    response = requests.post(
+                        f"{AUDIO_BACKEND_ENDPOINT}/synthesize/",
+                        json=tts_payload,
+                        timeout=20
+                    )
+
+                    if response.status_code == 200:
+                        # Store the audio alert
+                        audio_path = f"alerts/audio/alert_{int(time.time())}.mp3"
+                        minio_client.put_object(
+                            bucket_name, audio_path,
+                            io.BytesIO(response.content),
+                            len(response.content),
+                            content_type="audio/mpeg"
+                        )
+                        logger.info(
+                            f"Successfully generated and stored audio alert: {audio_path}")
+                        break
+                    else:
+                        logger.warning(
+                            f"Speech synthesis attempt {attempt + 1} failed with status {response.status_code}")
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
+                        else:
+                            logger.error(
+                                f"All speech synthesis attempts failed. Last status: {response.status_code}")
+                except requests.exceptions.RequestException as e:
+                    logger.warning(
+                        f"Speech synthesis attempt {attempt + 1} failed with error: {str(e)}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                    else:
+                        logger.error(
+                            f"All speech synthesis attempts failed. Last error: {str(e)}")
+
+            if not audio_path:
+                # Generate a fallback alert if TTS fails
+                fallback_alert = "ALERT: Suspicious object detected. Please check the alert details in the system."
+                tts_payload["text"] = fallback_alert
+                try:
+                    response = requests.post(
+                        f"{AUDIO_BACKEND_ENDPOINT}/synthesize/",
+                        json=tts_payload,
+                        timeout=20
+                    )
+                    if response.status_code == 200:
+                        audio_path = f"alerts/audio/fallback_alert_{int(time.time())}.mp3"
+                        minio_client.put_object(
+                            bucket_name, audio_path,
+                            io.BytesIO(response.content),
+                            len(response.content),
+                            content_type="audio/mpeg"
+                        )
+                        logger.info(
+                            f"Generated fallback audio alert: {audio_path}")
+                except Exception as e:
+                    logger.error(
+                        f"Failed to generate fallback audio alert: {str(e)}")
+
         except Exception as e:
-            logger.error(f"Error generating speech alert: {str(e)}")
+            logger.error(f"Error in speech synthesis process: {str(e)}")
 
         # Store alert data
         alert_data = {
@@ -212,7 +262,8 @@ def store_alert(video_path: str, objects: list, similar_videos: list, metadata: 
             "summary": summary,
             "alert_text": alert_text,
             "audio_path": audio_path,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "alert_status": "success" if audio_path else "warning"
         }
 
         # Store individual alert
