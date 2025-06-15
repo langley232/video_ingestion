@@ -11,10 +11,63 @@ from minio import Minio
 from minio.error import S3Error
 import io
 import time
+from fastapi import FastAPI, HTTPException
+import uvicorn
+from threading import Thread
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Initialize FastAPI app
+app = FastAPI()
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+
+@app.post("/search")
+async def search_videos(query_embedding: list):
+    try:
+        if not query_embedding:
+            raise HTTPException(
+                status_code=400, detail="No embedding provided")
+
+        # Convert query embedding to numpy array
+        query_vector = np.array([query_embedding], dtype=np.float32)
+
+        # Search the FAISS index
+        k = 5  # Number of results to return
+        distances, indices = gpu_index.search(query_vector, k)
+
+        # Get video paths from MinIO
+        results = []
+        for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
+            if idx != -1:  # Valid index
+                try:
+                    # Get video metadata
+                    metadata_path = f"metadata/metadata_{idx}.json"
+                    metadata_obj = minio_client.get_object(
+                        bucket_name, metadata_path)
+                    metadata = json.loads(metadata_obj.read().decode())
+
+                    results.append({
+                        "video_path": metadata.get("video_path", ""),
+                        # Convert distance to similarity score
+                        "similarity": float(1 / (1 + distance)),
+                        "metadata": metadata
+                    })
+                except Exception as e:
+                    logger.error(
+                        f"Error retrieving metadata for index {idx}: {str(e)}")
+                    continue
+
+        return {"similar_videos": results}
+    except Exception as e:
+        logger.error(f"Error searching videos: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Kafka configuration
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "redpanda:9092")
@@ -189,5 +242,15 @@ def main():
         consumer.close()
 
 
-if __name__ == "__main__":
+def start_kafka_consumer():
     main()
+
+
+if __name__ == "__main__":
+    # Start Kafka consumer in a separate thread
+    consumer_thread = Thread(target=start_kafka_consumer)
+    consumer_thread.daemon = True
+    consumer_thread.start()
+
+    # Start FastAPI server
+    uvicorn.run(app, host="0.0.0.0", port=8001)
