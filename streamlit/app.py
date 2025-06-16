@@ -6,6 +6,8 @@ import tempfile
 from minio import Minio
 import logging
 from datetime import datetime
+import io
+import time
 
 # Configuration
 INGESTION_ENDPOINT = os.getenv("INGESTION_ENDPOINT", "http://ingestion:8000")
@@ -147,6 +149,48 @@ search_query = st.text_input(
     placeholder="e.g., 'unidentified object over Central Park between 1 PM and 2 PM'"
 )
 
+
+def generate_search_alert_audio(search_results):
+    try:
+        # Create alert text with location and timing details
+        alert_text = "Search Results Alert: "
+        for result in search_results:
+            if 'metadata' in result and 'location' in result['metadata']:
+                loc = result['metadata']['location']
+                alert_text += f"Object detected at coordinates {loc.get('latitude', 'unknown')}, {loc.get('longitude', 'unknown')} "
+                if 'timestamp' in result:
+                    alert_text += f"at {result['timestamp']}. "
+
+        # Generate audio alert
+        tts_payload = {
+            "text": alert_text,
+            "voice_id": "21m00Tcm4TlvDq8ikWAM",
+            "model_id": "eleven_turbo_v2_5",
+            "stability": 0.5,
+            "similarity_boost": 0.75
+        }
+
+        response = requests.post(
+            f"{AUDIO_BACKEND_ENDPOINT}/synthesize/",
+            json=tts_payload,
+            timeout=20
+        )
+
+        if response.status_code == 200:
+            # Store the audio alert
+            audio_path = f"alerts/audio/search_alert_{int(time.time())}.mp3"
+            minio_client.put_object(
+                MINIO_BUCKET, audio_path,
+                io.BytesIO(response.content),
+                len(response.content),
+                content_type="audio/mpeg"
+            )
+            return audio_path
+    except Exception as e:
+        logger.error(f"Error generating search alert audio: {str(e)}")
+    return None
+
+
 if search_query:
     try:
         # Get embeddings for the search query
@@ -172,13 +216,105 @@ if search_query:
 
         if results.get("similar_videos"):
             st.write("Search Results:")
+
+            # Generate and play audio alert for search results
+            audio_path = generate_search_alert_audio(results["similar_videos"])
+            if audio_path:
+                audio_data = minio_client.get_object(
+                    MINIO_BUCKET, audio_path).read()
+                st.audio(audio_data, format="audio/mpeg")
+                st.write("Search Results Audio Alert")
+
             for result in results["similar_videos"]:
-                st.write(
-                    f"- {result['video_path']} (Similarity: {result['similarity']:.2f})")
+                with st.expander(f"Video: {result['video_path']} (Similarity: {result['similarity']:.2f})"):
+                    # Display video metadata
+                    if 'metadata' in result:
+                        st.write("### Video Metadata")
+                        metadata = result['metadata']
+
+                        # Location information
+                        if 'location' in metadata:
+                            loc = metadata['location']
+                            st.write("**Location:**")
+                            st.write(
+                                f"- Latitude: {loc.get('latitude', 'N/A')}")
+                            st.write(
+                                f"- Longitude: {loc.get('longitude', 'N/A')}")
+                            if 'name' in loc:
+                                st.write(f"- Place: {loc['name']}")
+
+                        # Timing information
+                        if 'timestamp' in result:
+                            st.write(f"**Timestamp:** {result['timestamp']}")
+
+                        # Video properties
+                        if 'video_metadata' in metadata:
+                            vid_meta = metadata['video_metadata']
+                            st.write("**Video Properties:**")
+                            st.write(
+                                f"- Resolution: {vid_meta.get('width', 'N/A')}x{vid_meta.get('height', 'N/A')}")
+                            st.write(f"- FPS: {vid_meta.get('fps', 'N/A')}")
+                            st.write(
+                                f"- Duration: {vid_meta.get('duration', 'N/A')} seconds")
+
+                        # Detection details
+                        if 'objects' in metadata:
+                            st.write("**Detected Objects:**")
+                            for obj in metadata['objects']:
+                                st.write(
+                                    f"- {obj['name']} (Confidence: {obj['confidence']:.0%})")
+                                if 'details' in obj:
+                                    st.write(f"  Details: {obj['details']}")
         else:
             st.write("No matching frames found.")
     except Exception as e:
         st.error(f"Error searching frames: {str(e)}")
+
+# Add streaming video metadata display
+st.header("Streaming Video")
+try:
+    # Get latest video metadata
+    objects = minio_client.list_objects(MINIO_BUCKET, prefix="metadata/")
+    metadata_files = [
+        obj.object_name for obj in objects if obj.object_name.endswith('.json')]
+
+    if metadata_files:
+        latest_metadata = sorted(metadata_files)[-1]
+        response = minio_client.get_object(MINIO_BUCKET, latest_metadata)
+        metadata = json.loads(response.read().decode())
+        response.close()
+        response.release_conn()
+
+        st.write("### Latest Stream Metadata")
+
+        # Location information
+        if 'location' in metadata:
+            loc = metadata['location']
+            st.write("**Location:**")
+            st.write(f"- Latitude: {loc.get('latitude', 'N/A')}")
+            st.write(f"- Longitude: {loc.get('longitude', 'N/A')}")
+            if 'name' in loc:
+                st.write(f"- Place: {loc['name']}")
+
+        # Video properties
+        if 'video_metadata' in metadata:
+            vid_meta = metadata['video_metadata']
+            st.write("**Video Properties:**")
+            st.write(
+                f"- Resolution: {vid_meta.get('width', 'N/A')}x{vid_meta.get('height', 'N/A')}")
+            st.write(f"- FPS: {vid_meta.get('fps', 'N/A')}")
+            st.write(f"- Duration: {vid_meta.get('duration', 'N/A')} seconds")
+
+        # Detection details
+        if 'objects' in metadata:
+            st.write("**Detected Objects:**")
+            for obj in metadata['objects']:
+                st.write(
+                    f"- {obj['name']} (Confidence: {obj['confidence']:.0%})")
+                if 'details' in obj:
+                    st.write(f"  Details: {obj['details']}")
+except Exception as e:
+    st.error(f"Error retrieving streaming metadata: {str(e)}")
 
 # Chat Interface
 st.header("Ask About Alerts (General LLM Chat)")
@@ -194,18 +330,45 @@ if prompt_chat:
 # Real-Time Alerts and Map
 st.header("Real-Time Alerts and Map")
 
-# Get latest alerts
-try:
-    alerts_data = get_latest_alerts()
-    if alerts_data and "sightings" in alerts_data:
-        st.write("Latest Alerts:")
-        for sighting in alerts_data["sightings"]:
-            st.write(
-                f"- {sighting['object']} detected at {sighting['timestamp']}")
-            if sighting.get('details'):
-                st.write(f"  Details: {sighting['details']}")
-    else:
+# Add audio alert playback
+
+
+def get_latest_audio_alert():
+    try:
+        # List objects in the alerts/audio directory
+        objects = minio_client.list_objects(
+            MINIO_BUCKET, prefix="alerts/audio/")
+        audio_files = [
+            obj.object_name for obj in objects if obj.object_name.endswith('.mp3')]
+
+        if audio_files:
+            # Get the most recent audio file
+            latest_audio = sorted(audio_files)[-1]
+            response = minio_client.get_object(MINIO_BUCKET, latest_audio)
+            audio_data = response.read()
+            response.close()
+            response.release_conn()
+            return audio_data
+        return None
+    except Exception as e:
+        logger.error(f"Error getting latest audio alert: {str(e)}")
+        return None
+
+
+# Display and play latest audio alert
+latest_audio = get_latest_audio_alert()
+if latest_audio:
+    st.audio(latest_audio, format="audio/mpeg")
+    st.write("Latest Alert Audio")
+
+# Get and display latest alerts
+alerts_data = get_latest_alerts()
+if alerts_data and "sightings" in alerts_data:
+    st.subheader("Latest Alerts")
+    for sighting in alerts_data["sightings"]:
         st.write(
-            "No alerts available yet. Alerts will appear here once video analysis detects relevant events.")
-except Exception as e:
-    st.error(f"Error retrieving alerts: {str(e)}")
+            f"- {sighting['object']} detected at {sighting['timestamp']} with {sighting['confidence']:.0%} confidence")
+        if sighting.get('details'):
+            st.write(f"  Details: {sighting['details']}")
+else:
+    st.write("No recent alerts")

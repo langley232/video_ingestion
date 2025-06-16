@@ -1,0 +1,83 @@
+version: "3.8"
+
+services:
+  image-collector:
+    build:
+      context: ./image_collector
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      - SERPAPI_API_KEY=d5565079-9a42-4ca2-a1a2-64e015aeaaed
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    depends_on:
+      - minio
+
+  fine-tuning:
+    build:
+      context: ./fine_tuning
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8000"
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    depends_on:
+      - minio
+      - image-collector
+
+  model-manager:
+    build:
+      context: ./model_manager
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8000"
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - OLLAMA_ENDPOINT=http://ollama:11434
+    depends_on:
+      - minio
+      - ollama
+
+  streamlit:
+    build:
+      context: ./streamlit_app
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - IMAGE_COLLECTOR_API=http://image-collector:8000
+      - FINE_TUNING_API=http://fine-tuning:8000
+      - MODEL_MANAGER_API=http://model-manager:8000
+    depends_on:
+      - image-collector
+      - fine-tuning
+      - model-manager
+
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  minio_data:
+  ollama_data:

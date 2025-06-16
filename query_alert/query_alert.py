@@ -165,7 +165,10 @@ def summarize_sightings(sightings: list) -> str:
 
 def store_alert(video_path: str, objects: list, similar_videos: list, metadata: dict, summary: str):
     try:
-        # Generate alert text for speech synthesis
+        # Generate immediate alert text for flying objects
+        immediate_alert_text = "Alert! Alert! There is a flying object coming through!"
+
+        # Generate detailed alert text for speech synthesis
         alert_text = f"ALERT: {summary}"
         if metadata.get("sightings"):
             for sighting in metadata["sightings"]:
@@ -173,12 +176,13 @@ def store_alert(video_path: str, objects: list, similar_videos: list, metadata: 
                 if sighting.get("details"):
                     alert_text += f"Details: {sighting['details']}. "
 
-        # Attempt text-to-speech synthesis
+        # Attempt text-to-speech synthesis for immediate alert
         audio_path = None
         try:
-            logger.info(f"Generating speech alert: {alert_text[:100]}...")
+            logger.info(
+                f"Generating immediate speech alert: {immediate_alert_text}")
             tts_payload = {
-                "text": alert_text,
+                "text": immediate_alert_text,
                 "voice_id": "21m00Tcm4TlvDq8ikWAM",  # Rachel voice
                 "model_id": "eleven_turbo_v2_5",
                 "stability": 0.5,
@@ -187,7 +191,7 @@ def store_alert(video_path: str, objects: list, similar_videos: list, metadata: 
 
             # Add retry logic for TTS
             max_retries = 3
-            retry_delay = 2  # seconds
+            retry_delay = 2
 
             for attempt in range(max_retries):
                 try:
@@ -207,7 +211,7 @@ def store_alert(video_path: str, objects: list, similar_videos: list, metadata: 
                             content_type="audio/mpeg"
                         )
                         logger.info(
-                            f"Successfully generated and stored audio alert: {audio_path}")
+                            f"Successfully generated and stored immediate audio alert: {audio_path}")
                         break
                     else:
                         logger.warning(
