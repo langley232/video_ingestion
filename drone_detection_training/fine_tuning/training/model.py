@@ -11,8 +11,9 @@ class MoondreamModel(nn.Module):
         super().__init__()
         # Load base model and processor
         self.model = AutoModelForVision2Seq.from_pretrained(
-            "vikhyatk/moondream2")
-        self.processor = AutoProcessor.from_pretrained("vikhyatk/moondream2")
+            "vikhyatk/moondream2", trust_remote_code=True)
+        self.processor = AutoProcessor.from_pretrained(
+            "vikhyatk/moondream2", trust_remote_code=True)
 
         # Freeze base model parameters
         for param in self.model.parameters():
