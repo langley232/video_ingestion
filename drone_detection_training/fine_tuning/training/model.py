@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoProcessor
+from moondream import MoondreamForConditionalGeneration
+
 import logging
 
 logger = logging.getLogger(__name__)
@@ -10,7 +12,7 @@ class MoondreamModel(nn.Module):
     def __init__(self):
         super().__init__()
         # Load base model and processor
-        self.model = AutoModelForVision2Seq.from_pretrained(
+        self.model = MoondreamForConditionalGeneration.from_pretrained(
             "vikhyatk/moondream2", trust_remote_code=True)
         self.processor = AutoProcessor.from_pretrained(
             "vikhyatk/moondream2", trust_remote_code=True)
