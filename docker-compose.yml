@@ -76,25 +76,56 @@ services:
     networks:
       - app-network
 
-  ollama:
+  # --- NEW OLLAMA SERVICE FOR QWEN2.5VL (VISION MODEL) ---
+  ollama_vision:
     image: ollama/ollama:latest
-    container_name: ollama
+    container_name: ollama_vision
     ports:
-      - "11434:11434"
+      - "11434:11434" # Keep 11434 for vision model (used by query_alert)
     volumes:
-      - ollama_data:/root/.ollama
+      - ollama_data:/root/.ollama # Share data volume to keep models pulled
       - ./ollama/entrypoint.sh:/entrypoint.sh
     entrypoint: ["/bin/bash", "/entrypoint.sh"]
     environment:
-      - OLLAMA_MODELS=nomic-embed-text:latest,qwen2.5vl:3b
+      - OLLAMA_MODELS=qwen2.5vl:3b # Only load the vision model here
+      - OLLAMA_HOST=0.0.0.0
     healthcheck:
-      disable: true
+      disable: true # Can enable a robust healthcheck later if needed
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: 1 # Allocate one A10 GPU
+              capabilities: [gpu]
+    runtime: nvidia
+    pull_policy: always
+    tty: true
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  # --- NEW OLLAMA SERVICE FOR NOMiC-EMBED-TEXT (EMBEDDING MODEL) ---
+  ollama_embeddings:
+    image: ollama/ollama:latest
+    container_name: ollama_embeddings
+    ports:
+      - "11435:11434" # Map to a different external port (11435)
+    volumes:
+      - ollama_data:/root/.ollama # Share data volume to keep models pulled
+      - ./ollama/entrypoint.sh:/entrypoint.sh
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    environment:
+      - OLLAMA_MODELS=nomic-embed-text:latest # Only load the embedding model here
+      - OLLAMA_HOST=0.0.0.0
+    healthcheck:
+      disable: true # Can enable a robust healthcheck later if needed
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1 # Allocate the second A10 GPU
               capabilities: [gpu]
     runtime: nvidia
     pull_policy: always
@@ -142,7 +173,7 @@ services:
       - MINIO_SECRET_KEY=minioadmin
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
       - FAISS_INDEX_PATH=/app/faiss/video_index.faiss
-      - OLLAMA_ENDPOINT=http://ollama:11434
+      - OLLAMA_ENDPOINT=http://ollama_embeddings:11434 # Point to the new embeddings service
     volumes:
       - faiss_data:/app/faiss
     deploy:
@@ -150,7 +181,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: 1 # Still allocate 1 GPU for FAISS/Numpy
               capabilities: [gpu]
     runtime: nvidia
     networks:
@@ -169,7 +200,7 @@ services:
       - MINIO_SECRET_KEY=minioadmin
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
       - AUDIO_BACKEND_ENDPOINT=http://audio_backend:8000
-      - OLLAMA_ENDPOINT=http://ollama:11434
+      - OLLAMA_ENDPOINT=http://ollama_vision:11434 # Point to the new vision service
     depends_on:
       redpanda:
         condition: service_healthy
@@ -182,7 +213,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s # <-- This gives the service a 30-second grace period
+      start_period: 30s
     networks:
       - app-network
 
@@ -198,6 +229,10 @@ services:
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
+      - STORAGE_ENDPOINT=http://storage:8001
+      - OLLAMA_ENDPOINT=http://ollama_vision:11434 # Point to the vision service for chat
+      - OLLAMA_EMBEDDINGS_ENDPOINT=http://ollama_embeddings:11434 # NEW ENV VAR for embeddings
+      - QUERY_ALERT_ENDPOINT=http://query_alert:8003
     depends_on:
       ingestion:
         condition: service_healthy
@@ -224,6 +259,6 @@ networks:
 
 volumes:
   minio_data:
-  ollama_data:
+  ollama_data: # This volume will be shared by both Ollama services
   faiss_data:
   redpanda-data:
