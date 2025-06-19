@@ -4,7 +4,7 @@ from torch.optim import AdamW
 from datetime import datetime
 import os
 import logging
-from .model import MoondreamModel
+from .model import Qwen2VLModel
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +13,7 @@ class ModelTrainer:
     def __init__(self):
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu")
-        self.model = MoondreamModel().to(self.device)
+        self.model = Qwen2VLModel().to(self.device)
 
         # Optimize for A10 GPU (24GB VRAM)
         if torch.cuda.is_available():
@@ -127,7 +127,7 @@ class ModelTrainer:
 
             # Generate model path
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            model_path = f"models/moondream_finetuned_{timestamp}.pt"
+            model_path = f"models/qwen2vl_finetuned_{timestamp}.pt"
 
             # Save model
             self.model.save(model_path)
