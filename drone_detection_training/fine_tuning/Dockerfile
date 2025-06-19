@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     build-essential \
     git \
+    libvips-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Ensure python and pip point to python3
