@@ -86,7 +86,7 @@ services:
       - ./ollama/entrypoint.sh:/entrypoint.sh
     entrypoint: ["/bin/bash", "/entrypoint.sh"]
     environment:
-      - OLLAMA_MODELS=nomic-embed-text:latest,moondream:1.8b,granite3.2-vision:2b,orca-mini:3b
+      - OLLAMA_MODELS=nomic-embed-text:latest,llava:7b,granite3.2-vision:2b,orca-mini:3b
     healthcheck:
       disable: true
     deploy:
