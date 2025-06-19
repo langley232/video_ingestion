@@ -65,7 +65,7 @@ def query_llm(prompt_chat: str) -> str:
 
         # This chat uses OLLAMA_ENDPOINT for general queries, not query_alert
         payload = {
-            "model": "llava:7b",
+            "model": "qwen2.5vl:3b",
             "prompt": f"""You are an AI assistant specialized in analyzing video surveillance footage and detecting suspicious objects, particularly drones and aerial vehicles. 
             
             Here is the current alerts data:

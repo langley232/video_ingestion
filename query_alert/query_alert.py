@@ -54,7 +54,7 @@ except S3Error as e:
     raise
 
 ollama_endpoint = os.getenv("OLLAMA_ENDPOINT", "http://ollama:11434")
-vision_model_name = "llava:7b"  # Changed to LLaVA-7B
+vision_model_name = "qwen2.5vl:3b"  # Changed to Qwen2.5VL-3B
 summary_model = "nomic-embed-text:latest"
 
 storage_endpoint = os.getenv("STORAGE_ENDPOINT", "http://storage:8001")
@@ -73,7 +73,7 @@ DETECTION_CONFIG = {
         "flying object"
     ],
     "confidence_threshold": 0.6,  # Lowered threshold for better detection
-    "model": "llava:7b"
+    "model": "qwen2.5vl:3b"
 }
 
 
