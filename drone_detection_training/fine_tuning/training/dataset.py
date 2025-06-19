@@ -6,6 +6,7 @@ from PIL import Image
 import io
 from typing import List, Optional
 import logging
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class DatasetManager:
         self.bucket_name = "drone-training-data"
 
     def _load_image(self, image_data):
-        """Load and preprocess image from bytes"""
+        """Load and preprocess image from bytes optimized for GPU"""
         try:
             image = Image.open(io.BytesIO(image_data))
             # Convert to RGB if needed
@@ -52,8 +53,14 @@ class DatasetManager:
             logger.error(f"Error loading metadata: {str(e)}")
             return None
 
-    def prepare_dataset(self, categories: Optional[List[str]] = None, batch_size: int = 8):
-        """Prepare dataset from MinIO storage"""
+    def _encode_labels(self, labels):
+        """Encode string labels to integers"""
+        unique_labels = list(set(labels))
+        label_to_idx = {label: idx for idx, label in enumerate(unique_labels)}
+        return [label_to_idx[label] for label in labels], label_to_idx
+
+    def prepare_dataset(self, categories: Optional[List[str]] = None, batch_size: int = 16):
+        """Prepare dataset from MinIO storage optimized for A10 GPU"""
         try:
             images = []
             labels = []
@@ -64,6 +71,8 @@ class DatasetManager:
                 prefix="images/",
                 recursive=True
             )
+
+            logger.info("Loading images from MinIO...")
 
             for obj in objects:
                 # Skip if not in selected categories
@@ -95,15 +104,32 @@ class DatasetManager:
                     category = obj.object_name.split('/')[1]
                     labels.append(category)
 
-            # Create dataset
-            dataset = DroneDataset(images, labels)
+            if not images:
+                raise ValueError("No images found matching the criteria")
 
-            # Create dataloader
+            # Encode labels
+            encoded_labels, label_mapping = self._encode_labels(labels)
+
+            # Convert to tensors
+            images_tensor = torch.stack(images)
+            labels_tensor = torch.tensor(encoded_labels, dtype=torch.long)
+
+            logger.info(
+                f"Dataset prepared: {len(images)} images, {len(set(labels))} categories")
+            logger.info(f"Label mapping: {label_mapping}")
+
+            # Create dataset
+            dataset = DroneDataset(images_tensor, labels_tensor)
+
+            # Create dataloader with GPU optimizations
             dataloader = DataLoader(
                 dataset,
                 batch_size=batch_size,
                 shuffle=True,
-                num_workers=2
+                num_workers=4,  # Increased for better performance
+                pin_memory=True,  # Faster data transfer to GPU
+                drop_last=True,  # Avoid incomplete batches
+                persistent_workers=True  # Keep workers alive between epochs
             )
 
             return dataloader
