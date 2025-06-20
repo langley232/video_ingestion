@@ -14,6 +14,7 @@ import time
 from fastapi import FastAPI, HTTPException
 import uvicorn
 from threading import Thread
+import tempfile # Added tempfile import
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -43,24 +44,20 @@ async def search_videos(query_embedding: list):
             raise HTTPException(
                 status_code=400, detail="No embedding provided")
 
-        # Convert query embedding to numpy array
         query_vector = np.array([query_embedding], dtype=np.float32)
 
-        # Search the FAISS index
-        k = min(5, gpu_index.ntotal) # Number of results to return, cap at total elements
+        k = min(5, gpu_index.ntotal)
         if k == 0:
             logger.info("FAISS index is empty, returning no results.")
             return {"similar_videos": []}
 
         distances, indices = gpu_index.search(query_vector, k)
 
-        # Get video paths and metadata from MinIO using the mapping
         results = []
         for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
-            if idx != -1 and idx < len(faiss_id_to_metadata_map):  # Valid index within our map
+            if idx != -1 and idx < len(faiss_id_to_metadata_map):
                 metadata_minio_path = faiss_id_to_metadata_map[idx]
                 try:
-                    # Get video metadata
                     metadata_obj = minio_client.get_object(
                         bucket_name, metadata_minio_path)
                     metadata = json.loads(metadata_obj.read().decode())
@@ -69,7 +66,7 @@ async def search_videos(query_embedding: list):
 
                     results.append({
                         "video_path": metadata.get("video_path", ""),
-                        "similarity": float(1 / (1 + distance)), # Convert distance to similarity score
+                        "similarity": float(1 / (1 + distance)),
                         "metadata": metadata
                     })
                 except Exception as e:
@@ -89,15 +86,15 @@ consumer_config = {
     "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
     "group.id": "storage-group",
     "auto.offset.reset": "earliest",
-    "enable.auto.commit": True
+    "enable.auto.commit": "true"
 }
 consumer = Consumer(consumer_config)
 
 # MinIO configuration
 minio_client = Minio(
     endpoint=os.getenv("MINIO_ENDPOINT", "minio:9000").replace("http://", ""),
-    access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"), # Corrected
-    secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"), # Corrected
+    access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+    secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
     secure=False
 )
 bucket_name = os.getenv("MINIO_BUCKET", "videos")
@@ -112,11 +109,9 @@ except S3Error as e:
 # FAISS configuration
 FAISS_INDEX_PATH = os.getenv(
     "FAISS_INDEX_PATH", "/app/faiss/video_index.faiss")
-FAISS_MAP_PATH = os.path.join(os.path.dirname(FAISS_INDEX_PATH), "faiss_map.json") # Path for the mapping
+FAISS_MAP_PATH = os.path.join(os.path.dirname(FAISS_INDEX_PATH), "faiss_map.json")
 os.makedirs(os.path.dirname(FAISS_INDEX_PATH), exist_ok=True)
-dimension = 512 # Nomic-embed-text outputs 768 dimensions usually. Adjust if needed.
-               # Check actual embedding dimension from Ollama.
-               # If it's 768, change dimension = 768
+dimension = 768 # Nomic-embed-text outputs 768 dimensions. Set it to 768.
                
 res = faiss.StandardGpuResources()
 faiss_index = faiss.IndexFlatL2(dimension)
@@ -130,7 +125,6 @@ if os.path.exists(FAISS_INDEX_PATH):
         logger.info(f"Loaded FAISS index from {FAISS_INDEX_PATH}")
     except Exception as e:
         logger.error(f"Error loading FAISS index: {str(e)}. Starting with empty index.")
-        # Re-initialize empty index if loading fails
         faiss_index = faiss.IndexFlatL2(dimension)
         gpu_index = faiss.index_cpu_to_gpu(res, 0, faiss_index)
 
@@ -150,14 +144,16 @@ def get_video_embedding(frame: np.ndarray) -> np.ndarray:
     """Generates an embedding for a video frame using Ollama."""
     try:
         _, buffer = cv2.imencode('.jpg', frame)
+        # Use the specific embeddings endpoint
+        ollama_embeddings_endpoint = os.getenv("OLLAMA_ENDPOINT", "http://ollama_embeddings:11434")
         response = requests.post(
-            f'{os.getenv("OLLAMA_ENDPOINT", "http://ollama:11434")}/api/embeddings', # Use env var or default
+            f'{ollama_embeddings_endpoint}/api/embeddings',
             json={
                 'model': 'nomic-embed-text:latest',
-                'prompt': buffer.tobytes().hex(), # Hex encode for binary image prompt
-                'keep_alive': '5m' # Keep model loaded for a while
+                'prompt': buffer.tobytes().hex(),
+                'keep_alive': '5m'
             },
-            timeout=15 # Increased timeout
+            timeout=30 # Increased timeout
         )
         response.raise_for_status()
         embedding = response.json().get('embedding', [])
@@ -165,8 +161,8 @@ def get_video_embedding(frame: np.ndarray) -> np.ndarray:
     except requests.exceptions.Timeout:
         logger.error("Ollama API request timed out during embedding generation.")
         return None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request error generating embedding: {str(e)}. Response: {e.response.text if e.response else 'N/A'}")
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Could not connect to Ollama embeddings service at {ollama_embeddings_endpoint}")
         return None
     except Exception as e:
         logger.error(f"Unexpected error generating embedding: {str(e)}")
@@ -178,14 +174,12 @@ def process_video_for_embedding_and_faiss(video_minio_path: str, metadata_minio_
     try:
         logger.info(f"Processing video {video_minio_path} for embedding and FAISS storage.")
 
-        # Get video content from MinIO
         response = minio_client.get_object(bucket_name, video_minio_path)
         video_binary = response.read()
         response.close()
         response.release_conn()
         logger.info(f"Retrieved video data for {video_minio_path} from MinIO.")
 
-        # Decode video to extract a frame for embedding
         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
             temp_file.write(video_binary)
             temp_file.flush()
@@ -197,29 +191,23 @@ def process_video_for_embedding_and_faiss(video_minio_path: str, metadata_minio_
             os.unlink(temp_path)
             return
 
-        ret, frame = cap.read() # Read the first frame
+        ret, frame = cap.read()
         cap.release()
-        os.unlink(temp_path) # Clean up temp file
+        os.unlink(temp_path)
 
         if ret:
             embedding = get_video_embedding(frame)
             if embedding is not None:
-                # Add embedding to FAISS index
                 current_faiss_size = gpu_index.ntotal
                 gpu_index.add(np.array([embedding]))
 
-                # Save FAISS index and update mapping
                 cpu_index = faiss.index_gpu_to_cpu(gpu_index)
                 faiss.write_index(cpu_index, FAISS_INDEX_PATH)
 
-                # Store mapping: current FAISS ID (which is current_faiss_size) to metadata_minio_path
-                # Ensure faiss_id_to_metadata_map is grown if needed
                 if len(faiss_id_to_metadata_map) <= current_faiss_size:
-                    # Pad with Nones if necessary, then append
                     faiss_id_to_metadata_map.extend([None] * (current_faiss_size + 1 - len(faiss_id_to_metadata_map)))
                 faiss_id_to_metadata_map[current_faiss_size] = metadata_minio_path
                 
-                # Persist the mapping
                 with open(FAISS_MAP_PATH, 'w') as f:
                     json.dump(faiss_id_to_metadata_map, f)
 
@@ -239,7 +227,6 @@ def kafka_consumer_loop():
     max_retries = 10
     retry_delay = 10
     
-    # Initial subscription attempt with retries
     for attempt in range(max_retries):
         try:
             consumer.subscribe([TOPIC_NAME])
@@ -251,17 +238,16 @@ def kafka_consumer_loop():
                 time.sleep(retry_delay)
             else:
                 logger.error(f"Max retries reached for Kafka subscription. Consumer might not receive messages.")
-                # Continue without subscribing, rely on subsequent polls to implicitly re-subscribe
                 pass 
 
     try:
         while True:
-            msg = consumer.poll(1000) # Poll for messages
+            msg = consumer.poll(1000) # Poll for messages (timeout in milliseconds)
 
             if msg is None:
                 logger.debug("No message received, continuing to poll...")
                 continue
-            if msg.error():
+            if msg.error() is not None:
                 if msg.error().code() == KafkaError._PARTITION_EOF:
                     logger.debug("Reached end of partition, continuing...")
                     continue
@@ -270,9 +256,9 @@ def kafka_consumer_loop():
                     continue
 
             try:
-                message_value = msg.value # Already deserialized by value_deserializer
+                message_value = json.loads(msg.value().decode("utf-8"))
                 video_path = message_value.get("video_path")
-                metadata_path = message_value.get("metadata_path") # Get metadata path from message
+                metadata_path = message_value.get("metadata_path")
 
                 if video_path and metadata_path:
                     process_video_for_embedding_and_faiss(video_path, metadata_path)
@@ -281,7 +267,7 @@ def kafka_consumer_loop():
 
             except Exception as e:
                 logger.error(f"Error processing Kafka message in storage consumer: {str(e)}")
-                # Continue to next message, don't crash loop
+                continue
 
     except KeyboardInterrupt:
         logger.info("Shutting down storage consumer...")
@@ -297,5 +283,4 @@ consumer_thread.start()
 
 
 if __name__ == "__main__":
-    # Start FastAPI server
     uvicorn.run(app, host="0.0.0.0", port=8001)

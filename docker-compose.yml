@@ -76,27 +76,27 @@ services:
     networks:
       - app-network
 
-  # --- NEW OLLAMA SERVICE FOR QWEN2.5VL (VISION MODEL) ---
+  # --- OLLAMA SERVICE FOR QWEN2.5VL (VISION MODEL) ---
   ollama_vision:
     image: ollama/ollama:latest
     container_name: ollama_vision
     ports:
-      - "11434:11434" # Keep 11434 for vision model (used by query_alert)
+      - "11434:11434"
     volumes:
-      - ollama_data:/root/.ollama # Share data volume to keep models pulled
+      - ollama_data:/root/.ollama
       - ./ollama/entrypoint.sh:/entrypoint.sh
     entrypoint: ["/bin/bash", "/entrypoint.sh"]
     environment:
-      - OLLAMA_MODELS=qwen2.5vl:3b # Only load the vision model here
+      - OLLAMA_MODELS=qwen2.5vl:3b
       - OLLAMA_HOST=0.0.0.0
-    healthcheck:
-      disable: true # Can enable a robust healthcheck later if needed
+    healthcheck: # REVERTED: No healthcheck to prevent startup issues
+      disable: true
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1 # Allocate one A10 GPU
+              count: 1
               capabilities: [gpu]
     runtime: nvidia
     pull_policy: always
@@ -105,27 +105,27 @@ services:
     networks:
       - app-network
 
-  # --- NEW OLLAMA SERVICE FOR NOMiC-EMBED-TEXT (EMBEDDING MODEL) ---
+  # --- OLLAMA SERVICE FOR NOMIC-EMBED-TEXT (EMBEDDING MODEL) ---
   ollama_embeddings:
     image: ollama/ollama:latest
     container_name: ollama_embeddings
     ports:
-      - "11435:11434" # Map to a different external port (11435)
+      - "11435:11434"
     volumes:
-      - ollama_data:/root/.ollama # Share data volume to keep models pulled
+      - ollama_data:/root/.ollama
       - ./ollama/entrypoint.sh:/entrypoint.sh
     entrypoint: ["/bin/bash", "/entrypoint.sh"]
     environment:
-      - OLLAMA_MODELS=nomic-embed-text:latest # Only load the embedding model here
+      - OLLAMA_MODELS=nomic-embed-text:latest
       - OLLAMA_HOST=0.0.0.0
-    healthcheck:
-      disable: true # Can enable a robust healthcheck later if needed
+    healthcheck: # REVERTED: No healthcheck to prevent startup issues
+      disable: true
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1 # Allocate the second A10 GPU
+              count: 1
               capabilities: [gpu]
     runtime: nvidia
     pull_policy: always
@@ -173,7 +173,7 @@ services:
       - MINIO_SECRET_KEY=minioadmin
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
       - FAISS_INDEX_PATH=/app/faiss/video_index.faiss
-      - OLLAMA_ENDPOINT=http://ollama_embeddings:11434 # Point to the new embeddings service
+      - OLLAMA_ENDPOINT=http://ollama_embeddings:11434 # Point to embeddings service
     volumes:
       - faiss_data:/app/faiss
     deploy:
@@ -181,9 +181,15 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1 # Still allocate 1 GPU for FAISS/Numpy
+              count: 1
               capabilities: [gpu]
     runtime: nvidia
+    healthcheck: # KEEP: Healthcheck for storage service (requested functionality)
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 45s # Give enough time for FAISS/MinIO/Kafka init
     networks:
       - app-network
 
@@ -199,8 +205,9 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
-      - AUDIO_BACKEND_ENDPOINT=http://audio_backend:8000
-      - OLLAMA_ENDPOINT=http://ollama_vision:11434 # Point to the new vision service
+      - AUDIO_BACKEND_ENDPOINT=http://audio_backend:8002
+      - OLLAMA_ENDPOINT=http://ollama_vision:11434 # Point to vision service
+      - OLLAMA_EMBEDDINGS_ENDPOINT=http://ollama_embeddings:11434 # For summarization
     depends_on:
       redpanda:
         condition: service_healthy
@@ -208,6 +215,12 @@ services:
         condition: service_healthy
       ingestion:
         condition: service_healthy
+      ollama_vision: # DEPENDS_ON: Vision Ollama
+        condition: service_started # Use service_started instead of service_healthy
+      ollama_embeddings: # DEPENDS_ON: Embeddings Ollama
+        condition: service_started # Use service_started instead of service_healthy
+      audio_backend: # DEPENDS_ON: Audio backend
+        condition: service_started # Use service_started instead of service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
       interval: 10s
@@ -230,14 +243,20 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - STORAGE_ENDPOINT=http://storage:8001
-      - OLLAMA_ENDPOINT=http://ollama_vision:11434 # Point to the vision service for chat
-      - OLLAMA_EMBEDDINGS_ENDPOINT=http://ollama_embeddings:11434 # NEW ENV VAR for embeddings
+      - OLLAMA_ENDPOINT=http://ollama_vision:11434 # Point to vision service for chat
+      - OLLAMA_EMBEDDINGS_ENDPOINT=http://ollama_embeddings:11434 # For embeddings in Streamlit UI
       - QUERY_ALERT_ENDPOINT=http://query_alert:8003
     depends_on:
       ingestion:
         condition: service_healthy
       query_alert:
         condition: service_healthy
+      storage: # DEPENDS_ON: Storage (requested functionality)
+        condition: service_healthy
+      ollama_vision: # DEPENDS_ON: Vision Ollama
+        condition: service_started # Use service_started instead of service_healthy
+      ollama_embeddings: # DEPENDS_ON: Embeddings Ollama
+        condition: service_started # Use service_started instead of service_healthy
     networks:
       - app-network
 
@@ -250,6 +269,8 @@ services:
       - "8002:8002"
     environment:
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+    healthcheck: # REVERTED: No healthcheck to prevent startup issues
+      disable: true
     networks:
       - app-network
 
@@ -259,6 +280,6 @@ networks:
 
 volumes:
   minio_data:
-  ollama_data: # This volume will be shared by both Ollama services
+  ollama_data:
   faiss_data:
   redpanda-data:
