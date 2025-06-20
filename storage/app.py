@@ -46,12 +46,14 @@ async def search_videos(query_embedding: list):
 
         query_vector = np.array([query_embedding], dtype=np.float32)
 
-        k = min(5, gpu_index.ntotal)
+        # Use faiss_index (CPU index) for search
+        k = min(5, faiss_index.ntotal) # Correctly uses faiss_index here
         if k == 0:
             logger.info("FAISS index is empty, returning no results.")
             return {"similar_videos": []}
 
-        distances, indices = gpu_index.search(query_vector, k)
+        # Search the CPU FAISS index
+        distances, indices = faiss_index.search(query_vector, k) # Correctly uses faiss_index here
 
         results = []
         for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
@@ -111,22 +113,24 @@ FAISS_INDEX_PATH = os.getenv(
     "FAISS_INDEX_PATH", "/app/faiss/video_index.faiss")
 FAISS_MAP_PATH = os.path.join(os.path.dirname(FAISS_INDEX_PATH), "faiss_map.json")
 os.makedirs(os.path.dirname(FAISS_INDEX_PATH), exist_ok=True)
-dimension = 768 # Nomic-embed-text outputs 768 dimensions. Set it to 768.
+dimension = 768 # Nomic-embed-text outputs 768 dimensions.
                
-res = faiss.StandardGpuResources()
-faiss_index = faiss.IndexFlatL2(dimension)
-gpu_index = faiss.index_cpu_to_gpu(res, 0, faiss_index)
+# --- CRITICAL FIX: Initialize FAISS on CPU ---
+# Removed `res = faiss.StandardGpuResources()`
+faiss_index = faiss.IndexFlatL2(dimension) # Initialize as CPU index
+# Removed `gpu_index = faiss.index_cpu_to_gpu(res, 0, faiss_index)`
+# --- END CRITICAL FIX ---
 
 # Load existing FAISS index and mapping on startup
 if os.path.exists(FAISS_INDEX_PATH):
     try:
-        cpu_index = faiss.read_index(FAISS_INDEX_PATH)
-        gpu_index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
-        logger.info(f"Loaded FAISS index from {FAISS_INDEX_PATH}")
+        # Load directly into the CPU index variable
+        faiss_index = faiss.read_index(FAISS_INDEX_PATH)
+        logger.info(f"Loaded FAISS index from {FAISS_INDEX_PATH} (CPU mode)")
     except Exception as e:
         logger.error(f"Error loading FAISS index: {str(e)}. Starting with empty index.")
+        # Re-initialize empty CPU index if loading fails
         faiss_index = faiss.IndexFlatL2(dimension)
-        gpu_index = faiss.index_cpu_to_gpu(res, 0, faiss_index)
 
 if os.path.exists(FAISS_MAP_PATH):
     try:
@@ -198,11 +202,12 @@ def process_video_for_embedding_and_faiss(video_minio_path: str, metadata_minio_
         if ret:
             embedding = get_video_embedding(frame)
             if embedding is not None:
-                current_faiss_size = gpu_index.ntotal
-                gpu_index.add(np.array([embedding]))
+                # Use faiss_index (CPU index) for adding
+                current_faiss_size = faiss_index.ntotal
+                faiss_index.add(np.array([embedding])) # Add to CPU index
 
-                cpu_index = faiss.index_gpu_to_cpu(gpu_index)
-                faiss.write_index(cpu_index, FAISS_INDEX_PATH)
+                # Save FAISS index and update mapping
+                faiss.write_index(faiss_index, FAISS_INDEX_PATH) # Save the CPU index directly
 
                 if len(faiss_id_to_metadata_map) <= current_faiss_size:
                     faiss_id_to_metadata_map.extend([None] * (current_faiss_size + 1 - len(faiss_id_to_metadata_map)))
