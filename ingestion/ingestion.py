@@ -13,12 +13,17 @@ import logging
 from datetime import datetime
 import cv2
 import tempfile
+import numpy as np
+from ingestion.object_detection.detector import ObjectDetector
+from ingestion.embedding_generator import EmbeddingGenerator
+from PIL import Image
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
 
 @app.get("/health")
 async def health_check():
@@ -67,6 +72,10 @@ producer = KafkaProducer(
     value_serializer=lambda x: json.dumps(x).encode('utf-8')
 )
 
+# Initialize object detector and embedding generator
+object_detector = ObjectDetector()
+embedding_generator = EmbeddingGenerator()
+
 
 def extract_video_metadata(video_content: bytes) -> dict:
     """Extract metadata from video content."""
@@ -97,6 +106,26 @@ def extract_video_metadata(video_content: bytes) -> dict:
         }
 
 
+def extract_frames(video_content: bytes, every_n_frames: int = 30):
+    """Extract frames from video content every n frames."""
+    frames = []
+    with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
+        temp_file.write(video_content)
+        temp_file.flush()
+        cap = cv2.VideoCapture(temp_file.name)
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if frame_count % every_n_frames == 0:
+                frames.append((frame_count, frame.copy()))
+            frame_count += 1
+        cap.release()
+        os.unlink(temp_file.name)
+    return frames
+
+
 @app.on_event("startup")
 async def startup_event():
     pass
@@ -106,21 +135,46 @@ async def startup_event():
 async def ingest_video(
     file: UploadFile = File(...),
     timestamp: str = Form(...),
-    latitude: float = Form(40.7829),  # Default to Central Park
-    longitude: float = Form(-73.9654),  # Default to Central Park
-    location_name: str = Form("Central Park"),  # Default location name
+    latitude: float = Form(40.7829),
+    longitude: float = Form(-73.9654),
+    location_name: str = Form("Central Park"),
     description: str = Form("")
 ):
     try:
-        # Read file content
         video_content = await file.read()
-
-        # Generate unique ID for this ingestion
         ingestion_id = str(uuid.uuid4())
-
-        # Extract video metadata
         video_metadata = extract_video_metadata(video_content)
-
+        # Store video in MinIO
+        video_path = f"generated_videos/{ingestion_id}.mp4"
+        minio_client.put_object(
+            bucket_name, video_path, io.BytesIO(
+                video_content), len(video_content)
+        )
+        # Extract frames
+        frames = extract_frames(video_content, every_n_frames=30)
+        enriched_frames = []
+        for frame_number, frame in frames:
+            # Scene embedding
+            scene_embedding = embedding_generator.generate_embedding(frame)
+            # Object detection
+            detections = object_detector.detect_objects(frame)
+            objects = []
+            for det in detections:
+                x1, y1, x2, y2 = map(int, det["bounding_box"])
+                obj_crop = frame[y1:y2, x1:x2]
+                obj_embedding = embedding_generator.generate_embedding(
+                    obj_crop)
+                objects.append({
+                    "object_type": det["object_type"],
+                    "confidence": det["confidence"],
+                    "bounding_box": det["bounding_box"],
+                    "object_embedding": obj_embedding.tolist()
+                })
+            enriched_frames.append({
+                "frame_number": frame_number,
+                "scene_embedding": scene_embedding.tolist(),
+                "objects": objects
+            })
         # Create metadata object
         metadata = {
             "ingestion_id": ingestion_id,
@@ -134,16 +188,10 @@ async def ingest_video(
             },
             "description": description,
             "video_metadata": video_metadata,
-            "ingestion_time": datetime.utcnow().isoformat()
+            "ingestion_time": datetime.utcnow().isoformat(),
+            "video_path": video_path,
+            "frames": enriched_frames
         }
-
-        # Store video in MinIO
-        video_path = f"generated_videos/{ingestion_id}.mp4"
-        minio_client.put_object(
-            bucket_name, video_path, io.BytesIO(
-                video_content), len(video_content)
-        )
-
         # Store metadata
         metadata_path = f"metadata/{ingestion_id}.json"
         metadata_bytes = json.dumps(metadata).encode('utf-8')
@@ -151,7 +199,6 @@ async def ingest_video(
             bucket_name, metadata_path, io.BytesIO(
                 metadata_bytes), len(metadata_bytes)
         )
-
         # Send to Kafka
         message = {
             "video_path": video_path,
@@ -161,11 +208,11 @@ async def ingest_video(
                 "latitude": latitude,
                 "longitude": longitude,
                 "name": location_name
-            }
+            },
+            "enriched": True
         }
         producer.send(TOPIC_NAME, value=message)
         producer.flush()
-
         return {
             "status": "Video ingested",
             "ingestion_id": ingestion_id,
