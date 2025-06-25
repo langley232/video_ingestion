@@ -11,7 +11,7 @@ YOLO_INPUT_SHAPE = [3, 640, 640]
 YOLO_OUTPUT_SHAPE = [25200, 85]
 YOLO_ONNX_PATH = os.path.join(
     TRITON_MODELS_DIR, YOLO_MODEL_NAME, "1", "model.onnx")
-YOLO_WEIGHTS_URL = "https://github.com/ultralytics/assets/releases/download/v8.0.0/yolov8n.pt"
+YOLO_WEIGHTS_URL = "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt"
 
 CLIP_MODEL_PATH = "clip-vit-b-16.onnx"
 CLIP_MODEL_NAME = "clip"
@@ -94,3 +94,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
