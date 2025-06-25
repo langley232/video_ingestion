@@ -3,6 +3,7 @@ import shutil
 import subprocess
 from urllib.request import urlretrieve
 from ultralytics import YOLO
+from huggingface_hub import hf_hub_download
 
 TRITON_MODELS_DIR = os.getenv("TRITON_MODELS_DIR", "triton_models")
 YOLO_MODEL_PATH = "yolov8n.pt"
@@ -11,7 +12,7 @@ YOLO_INPUT_SHAPE = [3, 640, 640]
 YOLO_OUTPUT_SHAPE = [25200, 85]
 YOLO_ONNX_PATH = os.path.join(
     TRITON_MODELS_DIR, YOLO_MODEL_NAME, "1", "model.onnx")
-YOLO_WEIGHTS_URL = "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt"
+YOLO_WEIGHTS_URL = "https://github.com/ultralytics/assets/releases/download/v8.0.0/yolov8n.pt"
 
 CLIP_MODEL_PATH = "clip-vit-b-16.onnx"
 CLIP_MODEL_NAME = "clip"
@@ -28,6 +29,19 @@ def download_file(url, dest):
         urlretrieve(url, dest)
     else:
         print(f"File {dest} already exists.")
+
+
+def download_clip_model():
+    token = os.getenv("HUGGINGFACE_TOKEN")
+    if not token:
+        raise RuntimeError("HUGGINGFACE_TOKEN environment variable not set")
+    print("Downloading CLIP ONNX model from Hugging Face with authentication...")
+    model_path = hf_hub_download(
+        repo_id="monster-labs/clip-vit-base-patch16-onnx",
+        filename="model.onnx",
+        token=token
+    )
+    shutil.copy(model_path, CLIP_MODEL_PATH)
 
 
 def export_yolo_to_onnx(model_path, export_dir, imgsz=640):
@@ -71,8 +85,8 @@ def main():
 
     # Download YOLOv8n weights if missing
     download_file(YOLO_WEIGHTS_URL, YOLO_MODEL_PATH)
-    # Download CLIP ONNX if missing
-    download_file(CLIP_ONNX_URL, CLIP_MODEL_PATH)
+    # Download CLIP ONNX if missing (with authentication)
+    download_clip_model()
 
     # Export YOLOv8n to ONNX and create Triton repo
     yolo_onnx_path = export_yolo_to_onnx(
@@ -94,4 +108,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
