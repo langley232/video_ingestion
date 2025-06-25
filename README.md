@@ -5,6 +5,22 @@ This project is a modular, scalable video ingestion and multimodal search system
 
 ---
 
+## Hardware Specifications
+
+This system is optimized for deployment on NVIDIA Jetson platforms. Below are the recommended configurations:
+
+### High-End Configuration
+- **Device:** NVIDIA Jetson AGX Orin 64GB
+- **Storage:** 1TB+ NVMe SSD for high-speed data access and storage of video files, embeddings, and models.
+- **Notes:** Ideal for handling multiple high-resolution video streams, complex multi-modal models, and demanding real-time analytics at the edge.
+
+### Mid-Range Configuration
+- **Device:** NVIDIA Jetson Orin NX 16GB
+- **Storage:** 512GB+ NVMe SSD.
+- **Notes:** A powerful, cost-effective option suitable for projects with fewer concurrent video streams or slightly less complex models. Still offers excellent performance for a wide range of AI tasks.
+
+---
+
 ## Services (docker-compose.yml)
 
 ### 1. **minio**
