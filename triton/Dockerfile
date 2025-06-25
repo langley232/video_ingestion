@@ -14,9 +14,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy model setup scripts
+# Copy model setup script
 COPY setup_triton.py .
-COPY triton_manager.py .
 
 # Create models directory
 RUN mkdir -p /app/triton_models
