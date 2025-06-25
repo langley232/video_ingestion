@@ -1,10 +1,12 @@
 import numpy as np
 import tritonclient.http as httpclient
+import os
 
 
 class ObjectDetector:
-    def __init__(self, triton_url="localhost:8002"):
-        self.triton_url = triton_url
+    def __init__(self, triton_url=None):
+        self.triton_url = triton_url or os.getenv(
+            "TRITON_ENDPOINT", "localhost:8002")
         self.model_name = "yolo"
         self.input_name = "images"
         self.output_name = "output0"

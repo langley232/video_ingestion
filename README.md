@@ -69,8 +69,13 @@ This system is optimized for deployment on NVIDIA Jetson platforms. Below are th
 
 ### 11. **triton**
 - **Purpose:** NVIDIA Triton Inference Server for serving YOLO and CLIP models (and others). All model inference is routed here.
-- **Port:** 8002 (HTTP), 8003 (gRPC)
+- **Port:** 8004 (HTTP), 8005 (gRPC)
 - **GPU:** Assignable
+
+### 12. **triton-model-prep**
+- **Purpose:** Automated model preparation service that exports YOLO and CLIP models to ONNX format and sets up the Triton model repository.
+- **Dependencies:** Runs before Triton server to prepare models
+- **GPU:** Not required (model preparation only)
 
 ---
 
@@ -116,9 +121,13 @@ video_ingestion/
 │   ├── app.py
 │   ├── requirements.txt
 │   └── Dockerfile
-├── triton_manager.py         # Automates model export and repo setup
-├── setup_triton.py           # Fully automates Triton deployment
-├── triton_client.py          # Example Triton inference client
+├── triton/                   # Triton infrastructure
+│   ├── Dockerfile            # Model preparation service
+│   ├── requirements.txt      # Model preparation dependencies
+│   └── setup_triton.py       # Model export and repository setup
+├── setup_triton_infrastructure.sh # Complete Triton setup script
+├── triton_client.py          # External Triton testing client
+├── requirements.txt          # Host dependencies for testing
 ├── triton_models/            # Triton model repository (auto-generated)
 ├── docker-compose.yml        # Orchestration for all services
 ├── REFACTOR_INSTRUCTIONS.md  # Detailed refactor and architecture plan
@@ -129,35 +138,102 @@ video_ingestion/
 
 ## **Usage Instructions**
 
-1. **Install dependencies:**
+### **Quick Start (Recommended)**
+1. **Install host dependencies for testing:**
    ```bash
    pip install -r requirements.txt
    ```
-2. **Automate model export and start Triton:**
-   ```bash
-   python setup_triton.py
-   ```
-3. **Start all services:**
+2. **Start all services (includes automated Triton setup):**
    ```bash
    docker-compose up --build -d
    ```
-4. **Test inference:**
+3. **Test Triton inference:**
    ```bash
    python triton_client.py
    ```
-5. **Access the UI:**
-   - Streamlit: [http://localhost:8501](http://localhost:8501)
-   - MinIO: [http://localhost:9001](http://localhost:9001)
-   - Redpanda Console: [http://localhost:8080](http://localhost:8080)
+
+### **Advanced Management**
+For additional management features, use the setup script:
+```bash
+# Make script executable
+chmod +x setup_triton_infrastructure.sh
+
+# Setup and start Triton infrastructure
+./setup_triton_infrastructure.sh
+
+# Start all services
+./setup_triton_infrastructure.sh start-all
+
+# View logs
+./setup_triton_infrastructure.sh logs
+
+# Check status
+./setup_triton_infrastructure.sh status
+
+# Test inference
+./setup_triton_infrastructure.sh test
+```
+
+### **Access the UI:**
+- Streamlit: [http://localhost:8501](http://localhost:8501)
+- MinIO: [http://localhost:9001](http://localhost:9001)
+- Redpanda Console: [http://localhost:8080](http://localhost:8080)
+- Triton Server: [http://localhost:8004](http://localhost:8004)
+
+---
+
+## **Root-Level Files Explanation**
+
+### **`requirements.txt`**
+- **Purpose**: Host dependencies for external testing
+- **Contains**: `tritonclient[http]` for testing Triton from host machine
+- **Used by**: `triton_client.py` and other host-side tools
+
+### **`triton_client.py`**
+- **Purpose**: External testing client for Triton inference
+- **Usage**: Test YOLO and CLIP models after services are running
+- **Location**: Root directory for easy access from host machine
+
+### **`setup_triton_infrastructure.sh`**
+- **Purpose**: Comprehensive Triton management script
+- **Features**: Setup, testing, monitoring, and management commands
+- **Alternative**: Can use `docker-compose` directly for basic operations
+
+---
+
+## **Triton Infrastructure**
+
+The Triton infrastructure is fully integrated into the main docker-compose.yml:
+
+### **Services:**
+- **triton-model-prep**: Automatically exports YOLO and CLIP models to ONNX format
+- **triton**: NVIDIA Triton Inference Server serving the prepared models
+
+### **Ports:**
+- **8004**: Triton HTTP API (external access)
+- **8005**: Triton gRPC API (external access)
+- **Internal**: Services use `http://triton:8000` (Docker network)
+
+### **Automated Flow:**
+```
+1. triton-model-prep starts → exports models to ONNX
+2. triton-model-prep completes → models ready in ./triton_models/
+3. triton server starts → loads models from ./triton_models/
+4. triton becomes healthy → ready for inference
+5. Other services start → can call Triton for inference
+```
 
 ---
 
 ## **Notes**
 - All model inference (YOLO, CLIP) is routed through Triton for scalability and GPU efficiency.
+- The Triton infrastructure is fully dockerized and integrated with the main application.
+- Model preparation is automated and runs before the Triton server starts.
+- Port conflicts have been resolved by updating Triton ports to 8004/8005.
 - LLM-based query refinement is handled via Fireworks.ai or Gemini cloud (not local GPU).
 - MongoDB Atlas is used for vector search and metadata storage.
 - MinIO can be swapped for AWS S3 or MinIO cloud for production.
 
 ---
 
-For more details, see `REFACTOR_INSTRUCTIONS.md`. 
+For more details, see `REFACTOR_INSTRUCTIONS.md`.

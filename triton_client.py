@@ -1,7 +1,9 @@
 import tritonclient.http as httpclient
 import numpy as np
 
-TRITON_URL = "localhost:8002"
+# Updated Triton URL - note the port change from 8002 to 8004
+# to avoid conflicts with other services in the main docker-compose.yml
+TRITON_URL = "localhost:8004"
 
 # Example: YOLOv8n inference
 # Input: (batch, 3, 640, 640) float32
