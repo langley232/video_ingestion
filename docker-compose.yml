@@ -287,7 +287,7 @@ services:
       - ./triton_models:/app/triton_models
     environment:
       - TRITON_MODELS_DIR=/app/triton_models
-      - HUGGINGFACE_TOKEN=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
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN}
     networks:
       - app-network
 
