@@ -33,7 +33,7 @@ def download_clip_model():
         filename="model.onnx",
         token=None  # Explicitly use no token for public download
     )
-    shutil.copy(model_path, CLIP_MODEL_PATH)ath, CLIP_MODEL_PATH)
+    shutil.copy(model_path, CLIP_MODEL_PATH)
 
 
 def export_yolo_to_onnx(model_path, export_dir, imgsz=640):

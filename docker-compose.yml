@@ -265,7 +265,7 @@ services:
 
   audio_api_backend:
     build:
-      context: ./audio_api_new/backend
+      context: ./audio_api/backend
       dockerfile: Dockerfile
     container_name: audio_api_backend
     ports:
@@ -279,7 +279,7 @@ services:
 
   audio_api_frontend:
     build:
-      context: ./audio_api_new/frontend
+      context: ./audio_api/frontend
       dockerfile: Dockerfile
     container_name: audio_api_frontend
     ports:
