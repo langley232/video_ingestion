@@ -12,7 +12,6 @@ YOLO_INPUT_SHAPE = [3, 640, 640]
 YOLO_OUTPUT_SHAPE = [25200, 85]
 YOLO_ONNX_PATH = os.path.join(
     TRITON_MODELS_DIR, YOLO_MODEL_NAME, "1", "model.onnx")
-YOLO_WEIGHTS_URL = "https://github.com/ultralytics/assets/releases/download/v8.0.0/yolov8n.pt"
 
 CLIP_MODEL_PATH = "clip-vit-b-16.onnx"
 CLIP_MODEL_NAME = "clip"
@@ -23,25 +22,18 @@ CLIP_ONNX_PATH = os.path.join(
     TRITON_MODELS_DIR, CLIP_MODEL_NAME, "1", "model.onnx")
 
 
-def download_file(url, dest):
-    if not os.path.exists(dest):
-        print(f"Downloading {url} to {dest}...")
-        urlretrieve(url, dest)
-    else:
-        print(f"File {dest} already exists.")
-
-
 def download_clip_model():
-    token = os.getenv("HUGGINGFACE_TOKEN")
-    if not token:
-        raise RuntimeError("HUGGINGFACE_TOKEN environment variable not set")
-    print("Downloading CLIP ONNX model from Hugging Face with authentication...")
+    """
+    Downloads the public CLIP ONNX model from Hugging Face.
+    Authentication is not required for this public model.
+    """
+    print("Downloading public CLIP ONNX model from Hugging Face...")
     model_path = hf_hub_download(
         repo_id="monster-labs/clip-vit-base-patch16-onnx",
         filename="model.onnx",
-        token=token
+        token=None  # Explicitly use no token for public download
     )
-    shutil.copy(model_path, CLIP_MODEL_PATH)
+    shutil.copy(model_path, CLIP_MODEL_PATH)ath, CLIP_MODEL_PATH)
 
 
 def export_yolo_to_onnx(model_path, export_dir, imgsz=640):
@@ -83,8 +75,10 @@ output [
 def main():
     print("🚀 Starting Triton model preparation...")
 
-    # Download YOLOv8n weights if missing
-    download_file(YOLO_WEIGHTS_URL, YOLO_MODEL_PATH)
+    # The YOLO() constructor will automatically download the weights if they are missing.
+    # No need to call a separate download function.
+    print("Initializing YOLOv8n model (will download if necessary)...")
+    
     # Download CLIP ONNX if missing (with authentication)
     download_clip_model()
 

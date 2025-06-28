@@ -1,0 +1,26 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - ELEVENLABS_API_KEY=${ELEVEN_API_KEY}
+    ports:
+      - "8000:8000"
+    networks:
+      - audio_network
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      - BACKEND_URL=http://backend:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+    networks:
+      - audio_network
+networks:
+  audio_network:
+    driver: bridge

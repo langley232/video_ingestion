@@ -208,7 +208,7 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
-      - AUDIO_BACKEND_ENDPOINT=http://audio_backend:8002
+      - AUDIO_BACKEND_ENDPOINT=http://audio_api_backend:8000
       - OLLAMA_ENDPOINT=http://ollama_vision:11434 # Point to vision service
       - OLLAMA_EMBEDDINGS_ENDPOINT=http://ollama_embeddings:11434 # For summarization
     depends_on:
@@ -222,7 +222,7 @@ services:
         condition: service_started # Use service_started instead of service_healthy
       ollama_embeddings: # DEPENDS_ON: Embeddings Ollama
         condition: service_started # Use service_started instead of service_healthy
-      audio_backend: # DEPENDS_ON: Audio backend
+      audio_api_backend: # DEPENDS_ON: Audio backend
         condition: service_started # Use service_started instead of service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
@@ -263,17 +263,31 @@ services:
     networks:
       - app-network
 
-  audio_backend:
+  audio_api_backend:
     build:
-      context: ./audio_api/backend
+      context: ./audio_api_new/backend
       dockerfile: Dockerfile
-    container_name: audio_backend
+    container_name: audio_api_backend
     ports:
-      - "8002:8002"
+      - "8002:8000"
     environment:
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
-    healthcheck: # REVERTED: No healthcheck to prevent startup issues
+    healthcheck:
       disable: true
+    networks:
+      - app-network
+
+  audio_api_frontend:
+    build:
+      context: ./audio_api_new/frontend
+      dockerfile: Dockerfile
+    container_name: audio_api_frontend
+    ports:
+      - "8502:8501"
+    environment:
+      - BACKEND_URL=http://audio_api_backend:8000
+    depends_on:
+      - audio_api_backend
     networks:
       - app-network
 
@@ -302,8 +316,8 @@ services:
       - ./triton_models:/models
     command: ["tritonserver", "--model-repository=/models"]
     ports:
-      - "8004:8000" # HTTP (changed from 8002 to avoid conflict with audio_backend)
-      - "8005:8001" # gRPC (changed from 8003 to avoid conflict with query_alert)
+      - "8004:8000" # HTTP
+      - "8005:8001" # gRPC
     depends_on:
       triton-model-prep:
         condition: service_completed_successfully

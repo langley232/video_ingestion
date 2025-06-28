@@ -131,6 +131,15 @@ async def startup_event():
     pass
 
 
+# Define suspicious objects for detection
+SUSPICIOUS_OBJECT_TYPES = [
+    "drone", "military drone", "unmanned aerial vehicle", "UAV",
+    "quadcopter", "fixed-wing drone", "rotorcraft", "aircraft",
+    "flying object", "airplane", "helicopter", "tank", "military vehicle",
+    "soldier", "weapon", "missile"
+]
+
+
 @app.post("/ingest")
 async def ingest_video(
     file: UploadFile = File(...),
@@ -153,6 +162,8 @@ async def ingest_video(
         # Extract frames
         frames = extract_frames(video_content, every_n_frames=30)
         enriched_frames = []
+        all_suspicious_objects = []
+
         for frame_number, frame in frames:
             # Scene embedding
             scene_embedding = embedding_generator.generate_embedding(frame)
@@ -164,12 +175,22 @@ async def ingest_video(
                 obj_crop = frame[y1:y2, x1:x2]
                 obj_embedding = embedding_generator.generate_embedding(
                     obj_crop)
-                objects.append({
+                
+                object_data = {
                     "object_type": det["object_type"],
                     "confidence": det["confidence"],
                     "bounding_box": det["bounding_box"],
                     "object_embedding": obj_embedding.tolist()
-                })
+                }
+                objects.append(object_data)
+
+                # Check if the object is suspicious
+                if det["object_type"].lower() in SUSPICIOUS_OBJECT_TYPES:
+                    all_suspicious_objects.append({
+                        "frame_number": frame_number,
+                        **object_data
+                    })
+
             enriched_frames.append({
                 "frame_number": frame_number,
                 "scene_embedding": scene_embedding.tolist(),
@@ -209,7 +230,8 @@ async def ingest_video(
                 "longitude": longitude,
                 "name": location_name
             },
-            "enriched": True
+            "enriched": True,
+            "suspicious_objects_found": all_suspicious_objects
         }
         producer.send(TOPIC_NAME, value=message)
         producer.flush()
